@@ -153,17 +153,142 @@ function search(workspaceDir, args) {
     : out;
 }
 
+// ---- simpleDiff ------------------------------------------------------------
+// LCS-based unified diff. Caps at 500 lines each to stay memory-safe.
+function simpleDiff(oldText, newText) {
+  const a = (oldText || "").split("\n");
+  const b = (newText || "").split("\n");
+  if (a.length > 500 || b.length > 500) {
+    return "[File too large to diff inline — showing new content first 60 lines]\n" +
+      b.slice(0, 60).map(l => "+" + l).join("\n") + (b.length > 60 ? "\n..." : "");
+  }
+  const n = a.length, m = b.length;
+  // Build DP table
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = 1; i <= n; i++)
+    for (let j = 1; j <= m; j++)
+      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
+  // Traceback
+  const trace = [];
+  let i = n, j = m;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i-1] === b[j-1]) { trace.push(" " + a[i-1]); i--; j--; }
+    else if (j > 0 && (i === 0 || dp[i][j-1] >= dp[i-1][j])) { trace.push("+" + b[j-1]); j--; }
+    else { trace.push("-" + a[i-1]); i--; }
+  }
+  trace.reverse();
+  // Collapse unchanged runs to context-only (3 lines around changes)
+  const CONTEXT = 3;
+  const changed = trace.map(l => l[0] !== " ");
+  const out = [];
+  let skipping = false;
+  for (let k = 0; k < trace.length; k++) {
+    const near = changed.slice(Math.max(0, k - CONTEXT), k + CONTEXT + 1).some(Boolean);
+    if (near) { skipping = false; out.push(trace[k]); }
+    else if (!skipping) { skipping = true; out.push("@@ ... @@"); }
+  }
+  return out.join("\n");
+}
+
+// ---- write_file ------------------------------------------------------------
+async function writeFile(workspaceDir, args, requestConfirm) {
+  if (!args.path) return "Error: 'path' argument is required.";
+  if (args.content == null) return "Error: 'content' argument is required.";
+
+  let target;
+  try { target = resolveSafe(workspaceDir, args.path); }
+  catch (e) { return "Error: " + e.message; }
+
+  const exists = fs.existsSync(target);
+  if (exists) {
+    let oldContent = "";
+    try { oldContent = fs.readFileSync(target, "utf8"); } catch (_) {}
+    const diff = simpleDiff(oldContent, args.content);
+    const approved = await requestConfirm({ kind: "write_file", path: args.path, diff });
+    if (!approved) return "File write denied by user. The file was not modified.";
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, args.content, "utf8");
+    return (exists ? "Updated" : "Created") + " " + args.path + " (" + Buffer.byteLength(args.content) + " bytes).";
+  } catch (e) {
+    return "Error writing file: " + e.message;
+  }
+}
+
+// ---- run_command -----------------------------------------------------------
+const { spawn } = require("child_process");
+const CMD_TIMEOUT_DEFAULT = 30;   // seconds
+const CMD_TIMEOUT_MAX     = 300;
+
+async function runCommand(workspaceDir, args, requestConfirm, onOutput, signal) {
+  if (!args.command) return "Error: 'command' argument is required.";
+
+  const approved = await requestConfirm({ kind: "command", command: args.command });
+  if (!approved) return "Command denied by user.";
+
+  const timeoutSec = Math.min(Math.max(1, Number(args.timeout) || CMD_TIMEOUT_DEFAULT), CMD_TIMEOUT_MAX);
+  const isWin = process.platform === "win32";
+
+  return new Promise((resolve) => {
+    let proc;
+    try {
+      proc = spawn(isWin ? "cmd" : "sh", [isWin ? "/c" : "-c", args.command], {
+        cwd: workspaceDir,
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+    } catch (e) { return resolve("Error spawning process: " + e.message); }
+
+    let output = "", finished = false;
+
+    const done = (code, err) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      resolve(err ? "Error: " + err.message
+        : output + "\n[Exit " + code + (code !== 0 ? " — command failed" : "") + "]");
+    };
+
+    const timer = setTimeout(() => {
+      onOutput("\n[Timed out after " + timeoutSec + "s]\n");
+      proc.kill("SIGTERM");
+      setTimeout(() => { if (!finished) proc.kill("SIGKILL"); }, 2000);
+      done(null, new Error("Command timed out after " + timeoutSec + "s"));
+    }, timeoutSec * 1000);
+
+    signal?.addEventListener("abort", () => {
+      if (!finished) { proc.kill("SIGTERM"); setTimeout(() => { if (!finished) proc.kill("SIGKILL"); }, 2000); }
+    });
+
+    const onData = chunk => { const t = chunk.toString(); output += t; onOutput(t); };
+    proc.stdout.on("data", onData);
+    proc.stderr.on("data", onData);
+    proc.on("close", code => done(code ?? 1));
+    proc.on("error", err => done(null, err));
+  });
+}
+
 // ---- dispatch --------------------------------------------------------------
-function executeTool(name, args, workspaceDir) {
+// Async — write_file and run_command need to await user confirmation.
+// callbacks: { requestConfirm, onOutput, signal }
+async function executeTool(name, args, workspaceDir, callbacks = {}) {
+  const { requestConfirm = async () => true, onOutput = () => {}, signal } = callbacks;
   switch (name) {
-    case "list_dir":  return listDir(workspaceDir, args || {});
-    case "read_file": return readFile(workspaceDir, args || {});
-    case "search":    return search(workspaceDir, args || {});
-    default:          return "Error: unknown tool '" + name + "'.";
+    case "list_dir":    return listDir(workspaceDir, args || {});
+    case "read_file":   return readFile(workspaceDir, args || {});
+    case "search":      return search(workspaceDir, args || {});
+    case "write_file":  return writeFile(workspaceDir, args || {}, requestConfirm);
+    case "run_command": return runCommand(workspaceDir, args || {}, requestConfirm, onOutput, signal);
+    default:            return "Error: unknown tool '" + name + "'.";
   }
 }
 
 // ---- OpenRouter tool definitions -------------------------------------------
+// READ_TOOL_NAMES — exposed in Plan mode only.
+// ALL tools — exposed in Act mode.
+const READ_TOOL_NAMES = new Set(["list_dir", "read_file", "search"]);
+
 const TOOL_DEFINITIONS = [
   {
     type: "function",
@@ -228,7 +353,49 @@ const TOOL_DEFINITIONS = [
         }
       }
     }
+  },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description:
+        "Create or overwrite a file in the workspace with the given content. " +
+        "Requires user approval before overwriting an existing file (a diff is shown). " +
+        "Parent directories are created automatically.",
+      parameters: {
+        type: "object",
+        required: ["path", "content"],
+        properties: {
+          path: { type: "string", description: "Relative path within the workspace." },
+          content: { type: "string", description: "Full UTF-8 content to write to the file." }
+        }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_command",
+      description:
+        "Run a shell command inside the workspace directory. Requires user approval before execution. " +
+        "stdout and stderr are streamed in real time and fed back to you when done. " +
+        "Use for: running tests, linters, builds, package installs, etc.",
+      parameters: {
+        type: "object",
+        required: ["command"],
+        properties: {
+          command: {
+            type: "string",
+            description: "Shell command to execute (sh -c on Unix, cmd /c on Windows)."
+          },
+          timeout: {
+            type: "number",
+            description: "Timeout in seconds before the process is killed (default 30, max 300)."
+          }
+        }
+      }
+    }
   }
 ];
 
-module.exports = { TOOL_DEFINITIONS, executeTool };
+module.exports = { TOOL_DEFINITIONS, READ_TOOL_NAMES, executeTool };

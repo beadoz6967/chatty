@@ -12,7 +12,7 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
-const { TOOL_DEFINITIONS, executeTool } = require("./tools");
+const { TOOL_DEFINITIONS, READ_TOOL_NAMES, executeTool } = require("./tools");
 
 // ---- tiny .env loader (no dependency) --------------------------------------
 (function loadEnv() {
@@ -53,6 +53,20 @@ app.get("/", (_req, res) => res.sendFile(INDEX_HTML));
 // ---- status ----------------------------------------------------------------
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, hasKey: Boolean(OPENROUTER_API_KEY), workspace: getWorkspaceDir() });
+});
+
+// ---- confirm gate ----------------------------------------------------------
+// When the agent needs to run_command or overwrite a file, it pauses the loop,
+// emits a confirm_request SSE event, and awaits a POST to /api/confirm/:id.
+// The frontend shows Approve / Deny; the result resolves the promise.
+const pendingConfirms = new Map();
+
+app.post("/api/confirm/:id", (req, res) => {
+  const cb = pendingConfirms.get(req.params.id);
+  if (!cb) return res.status(404).json({ error: "No pending confirmation found." });
+  pendingConfirms.delete(req.params.id);
+  cb(Boolean(req.body?.approved));
+  res.json({ ok: true });
 });
 
 // ---- live model list -------------------------------------------------------
@@ -317,8 +331,27 @@ async function runAgentLoop({ model, messages, tools, maxIterations = 20 }, work
           "Error: could not parse tool arguments as JSON after multiple attempts.\n" +
           "Raw arguments string: " + tc.function.arguments;
       } else {
+        // Build per-tool-call callbacks
+        const callId = tc.id;
+        const callbacks = {
+          signal,
+          onOutput: (text) => sseWrite(res, { type: "command_output", id: callId, text }),
+          requestConfirm: (payload) => new Promise((resolve) => {
+            const gateId = "gate_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+            sseWrite(res, { type: "confirm_request", id: gateId, ...payload });
+            pendingConfirms.set(gateId, resolve);
+            // 5-minute timeout — treat as denial to unblock the loop
+            setTimeout(() => {
+              if (pendingConfirms.has(gateId)) {
+                pendingConfirms.delete(gateId);
+                sseWrite(res, { type: "confirm_expired", id: gateId });
+                resolve(false);
+              }
+            }, 5 * 60 * 1000);
+          })
+        };
         try {
-          resultContent = executeTool(tc.function.name, parsedArgs, workspaceDir);
+          resultContent = await executeTool(tc.function.name, parsedArgs, workspaceDir, callbacks);
         } catch (err) {
           resultContent = "Error executing tool: " + err.message;
         }
@@ -358,7 +391,9 @@ const MODE_PREFIX = {
     "Explore the workspace thoroughly, then output a clear written plan. Do NOT modify any files.\n",
   act:
     "MODE: ACT — execute the task.\n" +
-    "Use tools methodically. Be precise. (Write/command tools unlock in the next phase.)\n"
+    "Tools: list_dir, read_file, search (read), write_file (create/overwrite), run_command (shell).\n" +
+    "Write files carefully. All file writes and shell commands require explicit user approval.\n" +
+    "If a command or write is denied, self-correct and try a different approach.\n"
 };
 
 app.post("/api/agent", async (req, res) => {
@@ -396,10 +431,15 @@ app.post("/api/agent", async (req, res) => {
   req.on("close", () => controller.abort());
 
   // Send the resolved mode back to the frontend so it can label the UI correctly
+  // Plan mode exposes only read-only tools; Act mode exposes the full set.
+  const tools = mode === "act"
+    ? TOOL_DEFINITIONS
+    : TOOL_DEFINITIONS.filter(t => READ_TOOL_NAMES.has(t.function.name));
+
   sseWrite(res, { type: "mode", mode });
 
   await runAgentLoop(
-    { model, messages: fullMessages, tools: TOOL_DEFINITIONS },
+    { model, messages: fullMessages, tools },
     workspaceDir,
     res,
     controller.signal

@@ -317,6 +317,53 @@
   }
   .banner.show { display: block; }
 
+  /* ---------- Confirm gate modal ---------- */
+  .confirm-overlay {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(6,18,42,0.72); backdrop-filter: blur(10px) saturate(120%);
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    display: flex; align-items: center; justify-content: center;
+    animation: rise 0.18s ease;
+  }
+  .confirm-overlay[hidden] { display: none; }
+  .confirm-modal {
+    width: min(640px, 92vw); max-height: 82vh;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .confirm-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 20px; border-bottom: 1px solid var(--glass-border);
+  }
+  .confirm-icon { font-size: 18px; }
+  .confirm-title { font-family: "Fraunces",serif; font-size: 16px; color: var(--gold); flex: 1; }
+  .confirm-subtitle { font-size: 12px; color: var(--ink-dim); }
+  .confirm-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+  .confirm-body pre {
+    background: rgba(4,14,30,0.72); border: 1px solid rgba(180,220,255,0.16);
+    border-radius: 10px; padding: 14px; font-size: 12px; line-height: 1.5;
+    font-family: ui-monospace,"SF Mono",Menlo,monospace;
+    overflow: auto; max-height: 340px; white-space: pre; margin: 0;
+  }
+  .diff-add { color: #7ce0a8; }
+  .diff-del { color: #ffb4b4; }
+  .diff-ctx { color: var(--ink-dim); }
+  .confirm-actions {
+    padding: 14px 20px; display: flex; gap: 10px; justify-content: flex-end;
+    border-top: 1px solid var(--glass-border);
+  }
+  .btn.deny { background: rgba(255,100,100,0.12); border-color: rgba(255,180,180,0.3); color: var(--danger); }
+  .btn.deny:hover { background: rgba(255,100,100,0.22); }
+
+  /* Terminal output inside tool cards */
+  .tool-card-body.term { background: rgba(4,12,26,0.9); }
+  .term-out {
+    margin: 0; padding: 12px;
+    font-family: ui-monospace,"SF Mono",Menlo,monospace; font-size: 12px;
+    line-height: 1.5; color: #c8e0ff;
+    white-space: pre-wrap; word-break: break-all;
+    max-height: 300px; overflow-y: auto;
+  }
+
   /* ---------- Code settings bar (mode + model selectors) ---------- */
   .code-settings {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -601,8 +648,8 @@
         <div class="messages" id="codeMessages">
           <div class="empty" id="codeEmpty">
             <h2>Code Agent ✦</h2>
-            <p>Switch between <b>Plan</b> (read-only investigation → written plan) and <b>Act</b> (execution, write tools coming soon). Each mode uses its own model.</p>
-            <span class="pill">read-only · phase 2</span>
+            <p>Switch between <b>Plan</b> (read-only investigation → written plan) and <b>Act</b> (executes: edits files &amp; runs commands, with approval). Each mode uses its own model.</p>
+            <span class="pill">plan · act · approval-gated</span>
           </div>
         </div>
         <div class="composer">
@@ -610,6 +657,24 @@
           <button class="btn gold send-btn" id="codeSendBtn" type="button">Send</button>
         </div>
       </section>
+    </div>
+  </div>
+
+  <!-- ===== Confirm gate modal ===== -->
+  <div class="confirm-overlay glass" id="confirmOverlay" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="confirm-modal">
+      <div class="confirm-head">
+        <span class="confirm-icon">⚠</span>
+        <div>
+          <div class="confirm-title" id="confirmTitle">Confirm action</div>
+          <div class="confirm-subtitle" id="confirmSubtitle"></div>
+        </div>
+      </div>
+      <div class="confirm-body" id="confirmBody"></div>
+      <div class="confirm-actions">
+        <button class="btn deny" id="confirmDeny" type="button">Deny</button>
+        <button class="btn gold" id="confirmApprove" type="button">Approve</button>
+      </div>
     </div>
   </div>
 
@@ -677,6 +742,15 @@
   const modeActBtn = $("modeAct");
   const planModelSelect = $("planModelSelect");
   const actModelSelect = $("actModelSelect");
+
+  // Confirm gate elements
+  const confirmOverlay = $("confirmOverlay");
+  const confirmTitle = $("confirmTitle");
+  const confirmSubtitle = $("confirmSubtitle");
+  const confirmBody = $("confirmBody");
+  const confirmApprove = $("confirmApprove");
+  const confirmDeny = $("confirmDeny");
+  let pendingConfirmId = null;
 
   // ===================== utilities =====================
   function showError(msg) {
@@ -1097,6 +1171,58 @@
     clearError();
   });
 
+  // ===================== CONFIRM GATE =====================
+
+  function renderDiffHtml(diffText) {
+    return diffText.split("\n").map(line => {
+      const esc = escapeHtml(line);
+      if (line.startsWith("+")) return '<span class="diff-add">' + esc + '</span>';
+      if (line.startsWith("-")) return '<span class="diff-del">' + esc + '</span>';
+      return '<span class="diff-ctx">' + esc + '</span>';
+    }).join("\n");
+  }
+
+  function showConfirmModal(evt) {
+    pendingConfirmId = evt.id;
+    if (evt.kind === "command") {
+      confirmTitle.textContent = "Run command?";
+      confirmSubtitle.textContent = "This will execute in the workspace directory.";
+      confirmBody.innerHTML = '<pre>$ ' + escapeHtml(evt.command || "") + '</pre>';
+    } else if (evt.kind === "write_file") {
+      confirmTitle.textContent = "Overwrite file?";
+      confirmSubtitle.textContent = evt.path || "";
+      confirmBody.innerHTML = '<pre>' + renderDiffHtml(evt.diff || "(no diff)") + '</pre>';
+    } else {
+      confirmTitle.textContent = "Confirm?";
+      confirmSubtitle.textContent = "";
+      confirmBody.innerHTML = '<pre>' + escapeHtml(JSON.stringify(evt, null, 2)) + '</pre>';
+    }
+    confirmOverlay.hidden = false;
+    confirmApprove.focus();
+  }
+
+  async function resolveConfirm(approved) {
+    if (!pendingConfirmId) return;
+    const id = pendingConfirmId;
+    pendingConfirmId = null;
+    confirmOverlay.hidden = true;
+    try {
+      await fetch(API + "/confirm/" + id, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved })
+      });
+    } catch (_) { /* server may have aborted */ }
+  }
+
+  confirmApprove.addEventListener("click", () => resolveConfirm(true));
+  confirmDeny.addEventListener("click",    () => resolveConfirm(false));
+
+  // Close on Escape (counts as denial so the agent doesn't hang)
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !confirmOverlay.hidden) resolveConfirm(false);
+  });
+
   // ===================== CODE PANEL — model selects + mode toggle =====================
 
   function populateCodeSelects() {
@@ -1216,11 +1342,14 @@
         '<span class="tool-status running">running…</span>' +
         '<span class="tool-chevron">▸</span>' +
       '</div>' +
-      '<div class="tool-card-body"><pre></pre></div>';
+      '<div class="tool-card-body' + (name === "run_command" ? " term" : "") + '">' +
+      '<pre class="' + (name === "run_command" ? "term-out" : "") + '"></pre></div>';
 
     card.querySelector(".tool-card-head").addEventListener("click", () => {
       card.classList.toggle("open");
     });
+    // Auto-open terminal cards immediately
+    if (name === "run_command") card.classList.add("open");
 
     codeMessagesEl.appendChild(card);
     codeScrollToBottom();
@@ -1228,18 +1357,37 @@
     toolCards.set(id, {
       card,
       statusEl: card.querySelector(".tool-status"),
-      bodyPre: card.querySelector(".tool-card-body pre")
+      bodyPre: card.querySelector("pre")
     });
     return card;
   }
 
-  // Update a tool card with the result (called when tool_result arrives).
+  // Append streaming command output to the terminal card body.
+  function appendCommandOutput(id, text) {
+    const entry = toolCards.get(id);
+    if (!entry) return;
+    entry.bodyPre.textContent += text;
+    // Keep terminal scrolled to bottom
+    const body = entry.card.querySelector(".tool-card-body");
+    if (body) body.scrollTop = body.scrollHeight;
+    codeScrollToBottom();
+  }
+
+  // Update a tool card with the final result (called when tool_result arrives).
   function updateToolCard(id, content, isError) {
     const entry = toolCards.get(id);
     if (!entry) return;
     entry.statusEl.className = "tool-status " + (isError ? "error" : "done");
     entry.statusEl.textContent = isError ? "error" : "done";
-    entry.bodyPre.textContent = content || "(empty)";
+    // For terminal cards, the output was streamed in — don't overwrite it.
+    // For regular cards, set the content now.
+    if (!entry.bodyPre.classList.contains("term-out")) {
+      entry.bodyPre.textContent = content || "(empty)";
+    }
+    // Auto-expand short non-terminal results
+    if (!entry.bodyPre.classList.contains("term-out") && content && content.length < 600) {
+      entry.card.classList.add("open");
+    }
     // Auto-expand short results so the user can see them without clicking
     if (content && content.length < 600) entry.card.classList.add("open");
     codeScrollToBottom();
@@ -1372,6 +1520,22 @@
 
             case "tool_result":
               updateToolCard(evt.id, evt.content, false);
+              break;
+
+            case "command_output":
+              appendCommandOutput(evt.id, evt.text);
+              break;
+
+            case "confirm_request":
+              showConfirmModal(evt);
+              break;
+
+            case "confirm_expired":
+              if (pendingConfirmId === evt.id) {
+                pendingConfirmId = null;
+                confirmOverlay.hidden = true;
+                showCodeError("Confirmation timed out — treated as denial.");
+              }
               break;
 
             case "done":
