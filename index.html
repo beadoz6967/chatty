@@ -317,6 +317,24 @@
   }
   .banner.show { display: block; }
 
+  /* per-chat rules inline editor */
+  .rules-panel {
+    display: none;
+    flex-direction: column;
+    gap: 7px;
+    padding: 14px clamp(14px, 3vw, 30px);
+    border-bottom: 1px solid rgba(180,220,255,0.12);
+    background: rgba(244,213,141,0.05);
+    animation: rise 0.3s ease both;
+  }
+  .rules-panel.show { display: flex; }
+  .rules-panel label {
+    font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--gold); font-weight: 600;
+  }
+  .rules-panel textarea { min-height: 72px; }
+  #perChatToggle.dirty { color: var(--gold); border-color: rgba(244,213,141,0.4); background: rgba(244,213,141,0.12); }
+
   /* composer */
   .composer {
     padding: 14px clamp(14px,3vw,22px);
@@ -390,8 +408,9 @@
       </div>
 
       <div class="field">
-        <label for="systemPrompt">System Prompt</label>
-        <textarea class="control" id="systemPrompt" placeholder="You are a helpful, dreamy assistant…">You are a helpful, thoughtful assistant.</textarea>
+        <label for="globalRules">Global System Rules</label>
+        <textarea class="control" id="globalRules" placeholder="Standing instructions applied to every chat…">You are a helpful, thoughtful assistant.</textarea>
+        <span class="status-line">Applied to every conversation.</span>
       </div>
     </aside>
 
@@ -401,8 +420,15 @@
         <span class="title">conversation</span>
         <div class="row">
           <button class="btn ghost mobile-toggle" id="mobileToggle" type="button">☰ settings</button>
+          <button class="btn ghost" id="perChatToggle" type="button" aria-expanded="false" aria-controls="rulesPanel">✎ chat rules</button>
           <button class="btn ghost" id="clearChatBtn" type="button">clear chat</button>
         </div>
+      </div>
+
+      <div class="rules-panel" id="rulesPanel">
+        <label for="perChatRules">Per-chat System Rules</label>
+        <textarea class="control" id="perChatRules" placeholder="Instructions for THIS conversation only…"></textarea>
+        <span class="status-line">Applies only to the current conversation, appended below the global rules.</span>
       </div>
 
       <div class="banner" id="banner"></div>
@@ -427,7 +453,9 @@
 
   const LS_KEY = "chatty.apiKey";
   const LS_MODEL = "chatty.model";
-  const LS_SYSTEM = "chatty.system";
+  const LS_GLOBAL = "chatty.globalRules";    // standing rules, every chat
+  const LS_PERCHAT = "chatty.perChatRules";  // rules for the active conversation
+  const LS_SYSTEM = "chatty.system";          // legacy single-prompt key (migrated below)
   const API_BASE = "https://openrouter.ai/api/v1";
 
   // ---- state ----
@@ -446,7 +474,10 @@
   const modelListEl = $("modelList");
   const modelStatusEl = $("modelStatus");
   const selectedModelEl = $("selectedModel");
-  const systemPromptEl = $("systemPrompt");
+  const globalRulesEl = $("globalRules");
+  const perChatRulesEl = $("perChatRules");
+  const perChatToggle = $("perChatToggle");
+  const rulesPanel = $("rulesPanel");
   const messagesEl = $("messages");
   const emptyState = $("emptyState");
   const inputEl = $("input");
@@ -532,11 +563,55 @@
     apiKeyEl.focus();
   });
 
-  // ===================== system prompt =====================
-  systemPromptEl.value = localStorage.getItem(LS_SYSTEM) || systemPromptEl.value;
-  systemPromptEl.addEventListener("input", () => {
-    localStorage.setItem(LS_SYSTEM, systemPromptEl.value);
+  // ===================== system rules (two layers) =====================
+  // Layer 1 — GLOBAL: standing rules applied to every conversation.
+  // Layer 2 — PER-CHAT: rules tied to the active conversation only.
+  // (A future "skills" layer will slot between these in composeSystemMessage.)
+
+  // Load GLOBAL (migrating the legacy single-prompt key if present).
+  const legacy = localStorage.getItem(LS_SYSTEM);
+  const storedGlobal = localStorage.getItem(LS_GLOBAL);
+  if (storedGlobal !== null) {
+    globalRulesEl.value = storedGlobal;
+  } else if (legacy !== null) {
+    globalRulesEl.value = legacy;
+    localStorage.setItem(LS_GLOBAL, legacy);
+    localStorage.removeItem(LS_SYSTEM);
+  }
+  globalRulesEl.addEventListener("input", () => {
+    localStorage.setItem(LS_GLOBAL, globalRulesEl.value);
   });
+
+  // Load PER-CHAT for the active conversation, and reflect dirty state on the toggle.
+  perChatRulesEl.value = localStorage.getItem(LS_PERCHAT) || "";
+  function reflectPerChatState() {
+    perChatToggle.classList.toggle("dirty", perChatRulesEl.value.trim().length > 0);
+  }
+  perChatRulesEl.addEventListener("input", () => {
+    localStorage.setItem(LS_PERCHAT, perChatRulesEl.value);
+    reflectPerChatState();
+  });
+  reflectPerChatState();
+
+  // Toggle the inline per-chat editor without cluttering the chat view.
+  perChatToggle.addEventListener("click", () => {
+    const open = rulesPanel.classList.toggle("show");
+    perChatToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) perChatRulesEl.focus();
+  });
+
+  // Single composable assembly point for the effective system message.
+  // Order: global rules, [future: skills], per-chat rules. Empty layers are skipped;
+  // if nothing remains, returns "" so no system message is sent.
+  function composeSystemMessage() {
+    const layers = [];
+    const global = globalRulesEl.value.trim();
+    if (global) layers.push(global);
+    // --- future skills layer injects here ---
+    const perChat = perChatRulesEl.value.trim();
+    if (perChat) layers.push(perChat);
+    return layers.join("\n\n");
+  }
 
   // ===================== models =====================
   function formatContext(n) {
@@ -675,9 +750,9 @@
     addMessageEl("user", text);
     history.push({ role: "user", content: text });
 
-    // build messages payload
+    // build messages payload — effective system message goes first
     const payloadMessages = [];
-    const sys = systemPromptEl.value.trim();
+    const sys = composeSystemMessage();
     if (sys) payloadMessages.push({ role: "system", content: sys });
     payloadMessages.push(...history);
 
@@ -812,11 +887,16 @@
 
   // ===================== clear chat =====================
   clearChatBtn.addEventListener("click", () => {
-    if (history.length && !confirm("Clear the whole conversation?")) return;
+    if ((history.length || perChatRulesEl.value.trim()) &&
+        !confirm("Clear this conversation and its per-chat rules? (Global rules are kept.)")) return;
     history = [];
     messagesEl.innerHTML = "";
     messagesEl.appendChild(emptyState);
     emptyState.style.display = "";
+    // per-chat rules belong to this conversation — reset them with it
+    perChatRulesEl.value = "";
+    localStorage.removeItem(LS_PERCHAT);
+    reflectPerChatState();
     clearError();
   });
 
