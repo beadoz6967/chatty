@@ -1048,8 +1048,12 @@
 
   function applyLayout() {
     const split = layoutMode === "split";
-    chatPanel.hidden = layoutMode === "code-only";
-    codePanel.hidden = layoutMode === "chat-only";
+    // NOTE: .chat/.code carry an explicit `display:flex` rule that overrides the
+    // [hidden] attribute, so visibility must be driven via inline display here.
+    chatPanel.hidden = false;
+    codePanel.hidden = false;
+    chatPanel.style.display = layoutMode === "code-only" ? "none" : "flex";
+    codePanel.style.display = layoutMode === "chat-only" ? "none" : "flex";
     resizeHandle.style.display = split ? "" : "none";
 
     if (split) {
