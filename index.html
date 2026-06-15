@@ -702,6 +702,11 @@
         <button class="btn" id="skillsBtn" type="button" style="width:100%">✦ Skills <span id="skillsCount" class="status-line"></span></button>
         <span class="status-line">Reusable instruction modules, toggled on per session.</span>
       </div>
+
+      <div class="field">
+        <button class="btn" id="usageBtn" type="button" style="width:100%">📊 Usage</button>
+        <span class="status-line">All-time tokens &amp; cost across both panels.</span>
+      </div>
     </aside>
 
     <!-- ================= WORKSPACE (CHAT / CODE) ================= -->
@@ -726,6 +731,14 @@
           <button class="btn ghost" id="perChatToggle" type="button" aria-expanded="false" aria-controls="rulesPanel">✎ chat rules</button>
           <button class="btn ghost" id="clearChatBtn" type="button">clear chat</button>
         </div>
+      </div>
+
+      <div class="code-status" id="chatStatus">
+        <span title="Estimated context usage">ctx</span>
+        <span class="ctx-bar"><span class="ctx-fill" id="chatCtxFill"></span></span>
+        <span id="chatCtxLabel">0%</span>
+        <span id="chatTokLabel">· 0 tok</span>
+        <span id="chatCostLabel">· <span class="cost-val">$0.0000</span></span>
       </div>
 
       <div class="rules-panel" id="rulesPanel">
@@ -877,6 +890,10 @@
   let history = [];           // CHAT panel conversation {role, content}
   let streaming = false;
   let abortController = null;
+  // CHAT panel usage (per conversation; reset on clear chat)
+  let chatRunningCost = 0;
+  let chatRunningTokens = 0;
+  let chatSessionId = "chat_" + Date.now();
 
   // CODE panel state
   let codeHistory = [];
@@ -919,6 +936,9 @@
   const bannerEl = $("banner");
   const sidebar = $("sidebar");
   const mobileToggle = $("mobileToggle");
+  const chatCtxFill = $("chatCtxFill"), chatCtxLabel = $("chatCtxLabel"),
+        chatTokLabel = $("chatTokLabel"), chatCostLabel = $("chatCostLabel");
+  const usageBtn = $("usageBtn");
 
   // Code panel elements
   const codeMessagesEl = $("codeMessages");
@@ -1252,6 +1272,7 @@
       renderModelList("");
       updateSelectedModelLabel();
       populateCodeSelects();
+      updateChatStatus();   // now that context_length is known
     } catch (e) {
       modelStatusEl.textContent = "";
       modelListEl.innerHTML = '<div class="model-item"><div class="meta">Could not load models.</div></div>';
@@ -1284,6 +1305,7 @@
     setSelectedModel(item.dataset.id);
     renderModelList(modelSearchEl.value);
     updateSelectedModelLabel();
+    updateChatStatus();   // ctx% depends on the selected model's window
   });
 
   modelSearchEl.addEventListener("input", () => renderModelList(modelSearchEl.value));
@@ -1302,6 +1324,32 @@
     } else {
       selectedModelEl.textContent = "No model selected";
     }
+  }
+
+  // ===================== chat usage / context meter =====================
+  // ctx% uses the live model's actual context_length (no hardcoded fallback);
+  // token + cost totals accumulate per conversation from usage SSE events.
+  function chatContextLen() {
+    const m = models.find(x => x.id === selectedModel);
+    return m && m.context_length ? m.context_length : null;
+  }
+  function updateChatStatus() {
+    let chars = composeSystemMessage().length;
+    for (const msg of history) chars += (typeof msg.content === "string" ? msg.content.length : 0);
+    const estTok = Math.ceil(chars / 4);
+    const ctxLen = chatContextLen();
+    if (ctxLen) {
+      const pct = Math.min(100, Math.round((estTok / ctxLen) * 100));
+      chatCtxFill.style.width = pct + "%";
+      chatCtxFill.classList.toggle("warn", pct > 70);
+      chatCtxLabel.textContent = pct + "%";
+    } else {
+      chatCtxFill.style.width = "0%";
+      chatCtxFill.classList.remove("warn");
+      chatCtxLabel.textContent = "?";
+    }
+    chatTokLabel.textContent = "· " + chatRunningTokens.toLocaleString() + " tok";
+    chatCostLabel.innerHTML = '· <span class="cost-val">$' + chatRunningCost.toFixed(4) + '</span>';
   }
 
   // ===================== chat rendering =====================
@@ -1364,6 +1412,7 @@
     // render user message + push to history
     addMessageEl("user", text);
     history.push({ role: "user", content: text });
+    updateChatStatus();
 
     // build messages payload — effective system message goes first
     const payloadMessages = [];
@@ -1382,7 +1431,7 @@
       const res = await fetch(API + "/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: selectedModel, messages: payloadMessages }),
+        body: JSON.stringify({ model: selectedModel, messages: payloadMessages, sessionId: chatSessionId }),
         signal: abortController.signal
       });
 
@@ -1409,9 +1458,17 @@
           const trimmed = line.trim();
           if (!trimmed || !trimmed.startsWith("data:")) continue;
           const data = trimmed.slice(5).trim();
-          if (data === "[DONE]") { buffer = ""; break; }
+          // Skip [DONE] but keep scanning — the backend appends a usage event after it.
+          if (data === "[DONE]") continue;
           try {
             const json = JSON.parse(data);
+            // Backend emits a usage event (same shape as the agent loop) after the stream.
+            if (json.type === "usage") {
+              chatRunningTokens += (json.prompt || 0) + (json.completion || 0);
+              chatRunningCost += json.cost || 0;
+              updateChatStatus();
+              continue;
+            }
             const delta = json.choices && json.choices[0] && json.choices[0].delta;
             const token = delta && delta.content;
             if (token) {
@@ -1428,6 +1485,7 @@
       aiBubble.dataset.raw = acc;
       aiBubble.innerHTML = acc ? renderMarkdown(acc) : "<em>(empty response)</em>";
       history.push({ role: "assistant", content: acc });
+      updateChatStatus();
       scrollToBottom();
     } catch (err) {
       handleSendError(err, aiBubble, acc);
@@ -1508,6 +1566,11 @@
     perChatRulesEl.value = "";
     localStorage.removeItem(LS_PERCHAT);
     reflectPerChatState();
+    // usage is per-conversation — reset totals and start a fresh session
+    chatRunningCost = 0;
+    chatRunningTokens = 0;
+    chatSessionId = "chat_" + Date.now();
+    updateChatStatus();
     clearError();
   });
 
@@ -1602,9 +1665,11 @@
 
   // ===================== CONTEXT + COST (Phase 6/7) =====================
   function estTokens(str) { return Math.ceil((str || "").length / 4); }
+  // Actual context window for the active mode's model, or null if unknown.
   function currentContextLen() {
-    const m = models.find(x => x.id === (codeMode === "act" ? actModelSelect.value : planModelSelect.value));
-    return (m && m.context_length) || 8192;
+    const id = codeMode === "act" ? actModelSelect.value : planModelSelect.value;
+    const m = models.find(x => x.id === id);
+    return m && m.context_length ? m.context_length : null;
   }
   function updateContextMeter() {
     let chars = 0;
@@ -1613,11 +1678,19 @@
     chars += codePins.reduce((a, p) => a + (p.content || "").length, 0);
     const tokens = Math.ceil(chars / 4);
     const ctxLen = currentContextLen();
-    const pct = Math.min(100, Math.round((tokens / ctxLen) * 100));
-    ctxFill.style.width = pct + "%";
-    ctxFill.classList.toggle("warn", pct > 70);
-    ctxLabel.textContent = pct + "%";
-    tokLabel.textContent = "· ~" + tokens.toLocaleString() + " / " + ctxLen.toLocaleString() + " tok";
+    if (ctxLen) {
+      const pct = Math.min(100, Math.round((tokens / ctxLen) * 100));
+      ctxFill.style.width = pct + "%";
+      ctxFill.classList.toggle("warn", pct > 70);
+      ctxLabel.textContent = pct + "%";
+      tokLabel.textContent = "· ~" + tokens.toLocaleString() + " / " + ctxLen.toLocaleString() + " tok";
+    } else {
+      // Model context length unknown — don't fake a percentage.
+      ctxFill.style.width = "0%";
+      ctxFill.classList.remove("warn");
+      ctxLabel.textContent = "?";
+      tokLabel.textContent = "· ~" + tokens.toLocaleString() + " tok";
+    }
   }
   function updateCostMeter() {
     costLabel.innerHTML = '· <span class="cost-val">$' + runningCost.toFixed(4) + '</span> · ' +
@@ -1845,9 +1918,65 @@
     });
   }
 
+  // ---- Usage summary ----
+  function fmtCost(n) { return "$" + (Number(n) || 0).toFixed(4); }
+  function fmtTok(n) { return (Number(n) || 0).toLocaleString() + " tok"; }
+  async function openUsageDrawer() {
+    openDrawer("Usage", null);
+    drawerBody.innerHTML = '<div class="lc-meta">Loading…</div>';
+    try {
+      const r = await fetch(API + "/usage/summary");
+      const s = await r.json();
+      drawerBody.innerHTML = "";
+
+      const totals = document.createElement("div");
+      totals.className = "list-card";
+      totals.innerHTML =
+        '<div class="lc-title">All-time</div>' +
+        '<div class="lc-meta"><span class="cost-val">' + fmtCost(s.totalCost) + '</span> · ' + fmtTok(s.totalTokens) + '</div>' +
+        '<div class="lc-title" style="margin-top:8px">Today</div>' +
+        '<div class="lc-meta"><span class="cost-val">' + fmtCost(s.todayCost) + '</span> · ' + fmtTok(s.todayTokens) + '</div>';
+      drawerBody.appendChild(totals);
+
+      const byModel = s.byModel || [];
+      if (byModel.length) {
+        const head = document.createElement("div");
+        head.className = "lc-meta";
+        head.textContent = "Top models by cost";
+        drawerBody.appendChild(head);
+        byModel.forEach(m => {
+          const card = document.createElement("div");
+          card.className = "list-card";
+          card.innerHTML =
+            '<div class="lc-title">' + escapeHtml(m.model) + '</div>' +
+            '<div class="lc-meta"><span class="cost-val">' + fmtCost(m.cost) + '</span> · ' + fmtTok(m.tokens) + '</div>';
+          drawerBody.appendChild(card);
+        });
+      } else {
+        const none = document.createElement("div");
+        none.className = "lc-meta";
+        none.textContent = "No usage recorded yet.";
+        drawerBody.appendChild(none);
+      }
+
+      const clearCard = document.createElement("div");
+      clearCard.className = "list-card";
+      clearCard.innerHTML = '<div class="lc-actions"><button class="btn ghost deny" id="usageClearBtn">clear usage history</button></div>';
+      clearCard.querySelector("#usageClearBtn").addEventListener("click", async () => {
+        if (!confirm("Clear all usage history? This cannot be undone.")) return;
+        try { await fetch(API + "/usage", { method: "DELETE" }); openUsageDrawer(); }
+        catch (_) { showError("Could not clear usage history."); }
+      });
+      drawerBody.appendChild(clearCard);
+    } catch (_) {
+      drawerBody.innerHTML = '<div class="lc-meta">Could not load usage summary.</div>';
+    }
+  }
+
   codeTasksBtn.addEventListener("click", openTasksDrawer);
   codeCkptBtn.addEventListener("click", openCkptDrawer);
   skillsBtn.addEventListener("click", openSkillsDrawer);
+  usageBtn.addEventListener("click", openUsageDrawer);
   codeNewBtn.addEventListener("click", () => {
     if (codeHistory.length && !confirm("Start a new task? The current one is saved in history.")) return;
     currentTaskId = "task_" + Date.now();
@@ -2240,7 +2369,7 @@
 
   // Drop oldest user/assistant turns when the estimated context exceeds ~75%.
   function trimHistoryIfNeeded() {
-    const ctxLen = currentContextLen();
+    const ctxLen = currentContextLen() || 8192;   // safe fallback for trim math only
     const budget = Math.floor(ctxLen * 0.75);
     const sysTokens = estTokens(composeCodeSystem());
     function total() { return sysTokens + codeHistory.reduce((a, m) =>
@@ -2298,6 +2427,7 @@
   renderPins();
   updateContextMeter();
   updateCostMeter();
+  updateChatStatus();
   // Persist defaults on first load (chat-only @ 50% ratio) and apply restored layout.
   if (localStorage.getItem(LS_LAYOUT) === null) localStorage.setItem(LS_LAYOUT, layoutMode);
   if (localStorage.getItem(LS_SPLIT)  === null) localStorage.setItem(LS_SPLIT, String(splitRatio));

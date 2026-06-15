@@ -12,6 +12,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "express": "^4.19.2"
   }
 }

@@ -43,11 +43,74 @@ function getWorkspaceDir() {
   return path.resolve(__dirname, process.env.WORKSPACE_DIR || "./workspace");
 }
 
-// ---- on-disk data (tasks + checkpoints) ------------------------------------
-const DATA_DIR  = path.join(__dirname, ".data");
-const TASKS_DIR = path.join(DATA_DIR, "tasks");
-const CKPT_DIR  = path.join(DATA_DIR, "checkpoints");
-function ensureDir(d) { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); }
+// ---- SQLite storage (tasks + checkpoints + usage) --------------------------
+// Replaces the old flat-file .data/ store. NOTE: tasks/checkpoints that earlier
+// versions saved as JSON files under .data/ are NOT migrated and will be lost.
+const Database = require("better-sqlite3");
+
+// DATA_DIR points at the SQLite .db FILE. Relative paths resolve against server/;
+// absolute paths are used as-is. Default: ./.data/chatty.db (i.e. server/.data/).
+function getDbPath() {
+  const p = process.env.DATA_DIR || "./.data/chatty.db";
+  return path.isAbsolute(p) ? p : path.resolve(__dirname, p);
+}
+
+let db = null;
+function initDb() {
+  const dbPath = getDbPath();
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });   // ensure the db folder exists
+  db = new Database(dbPath);
+  db.pragma("journal_mode = WAL");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      mode TEXT,
+      messages TEXT,
+      pins TEXT,
+      cost REAL DEFAULT 0,
+      tokens INTEGER DEFAULT 0,
+      updated INTEGER
+    );
+    CREATE TABLE IF NOT EXISTS checkpoints (
+      id TEXT PRIMARY KEY,
+      task_id TEXT,
+      step INTEGER,
+      path TEXT,
+      existed INTEGER,
+      time INTEGER,
+      content BLOB
+    );
+    CREATE TABLE IF NOT EXISTS chat_usage (
+      id TEXT PRIMARY KEY,
+      session TEXT,                 -- extra column: groups rows for /api/usage/session
+      panel TEXT,
+      model TEXT,
+      prompt_tokens INTEGER,
+      completion_tokens INTEGER,
+      cost REAL,
+      ts INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_ckpt_task ON checkpoints(task_id);
+    CREATE INDEX IF NOT EXISTS idx_usage_session ON chat_usage(session);
+  `);
+  return dbPath;
+}
+
+function genId(prefix) { return prefix + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8); }
+function safeParse(s, fallback) { try { return JSON.parse(s); } catch (_) { return fallback; } }
+
+// Record one completion's token usage. Never throws (DB issues must not crash a request).
+function recordUsage(panel, model, usage, session) {
+  if (!db || !usage) return;
+  try {
+    db.prepare(
+      `INSERT INTO chat_usage (id, session, panel, model, prompt_tokens, completion_tokens, cost, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(genId("u"), session || panel, panel, model || "",
+          usage.prompt_tokens || 0, usage.completion_tokens || 0, usage.cost || 0, Date.now());
+  } catch (_) {}
+}
 
 // Phase 8 — always-on workspace rules file (first that exists wins)
 function readWorkspaceRules(workspaceDir) {
@@ -60,16 +123,17 @@ function readWorkspaceRules(workspaceDir) {
   return "";
 }
 
-// Phase 7 — snapshot a file's pre-write state so a step can be rolled back.
+// Phase 7 — snapshot a file's pre-write state into SQLite so a step can be rolled back.
 function snapshotFile(taskId, step, relPath, absPath, res) {
+  if (!db) return;
   try {
-    ensureDir(path.join(CKPT_DIR, taskId));
-    const id = "ck_" + Date.now() + "_" + Math.random().toString(36).slice(2, 6);
+    const id = genId("ck");
     const existed = fs.existsSync(absPath);
-    const meta = { id, taskId, step, path: relPath, existed, time: Date.now() };
-    const base = path.join(CKPT_DIR, taskId, id);
-    if (existed) fs.copyFileSync(absPath, base + ".content");
-    fs.writeFileSync(base + ".json", JSON.stringify(meta));
+    const content = existed ? fs.readFileSync(absPath) : null;   // raw bytes → BLOB column
+    db.prepare(
+      `INSERT INTO checkpoints (id, task_id, step, path, existed, time, content)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, taskId, step, relPath, existed ? 1 : 0, Date.now(), content);
     if (res) sseWrite(res, { type: "checkpoint", id, step, path: relPath, existed });
   } catch (_) {}
 }
@@ -118,7 +182,7 @@ app.post("/api/chat", async (req, res) => {
       error: { message: "No OPENROUTER_API_KEY set on the server. Add it to server/.env and restart." }
     });
   }
-  const { model, messages } = req.body || {};
+  const { model, messages, sessionId } = req.body || {};
   if (!model || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: { message: "Request must include a model and a non-empty messages array." } });
   }
@@ -136,7 +200,7 @@ app.post("/api/chat", async (req, res) => {
         "HTTP-Referer": "http://localhost:" + PORT,
         "X-Title": "chatty"
       },
-      body: JSON.stringify({ model, messages, stream: true }),
+      body: JSON.stringify({ model, messages, stream: true, usage: { include: true } }),
       signal: controller.signal
     });
   } catch (_e) {
@@ -157,12 +221,38 @@ app.post("/api/chat", async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   if (res.flushHeaders) res.flushHeaders();
 
+  // Forward upstream bytes verbatim to the client, but also sniff the SSE lines
+  // for the trailing usage chunk so we can emit a clean usage event + record it.
+  let usage = null;
   try {
     const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
-      res.write(Buffer.from(value));
+      res.write(Buffer.from(value));                 // pass-through (client streaming unchanged)
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith("data:")) continue;
+        const data = line.slice(5).trim();
+        if (data === "[DONE]") continue;
+        const j = safeParse(data, null);
+        if (j && j.usage) usage = j.usage;
+      }
+    }
+    if (usage) {
+      // Same shape the agent loop emits; the client handles type:"usage".
+      sseWrite(res, {
+        type: "usage",
+        prompt: usage.prompt_tokens || 0,
+        completion: usage.completion_tokens || 0,
+        cost: usage.cost || 0
+      });
+      recordUsage("chat", model, usage, sessionId);
     }
   } catch (_e) { /* client aborted */ } finally {
     res.end();
@@ -378,6 +468,7 @@ async function runAgentLoop(ctx, res, signal) {
         cost: usage.cost || 0,
         total: totalUsage
       });
+      recordUsage("code", model, usage, taskId);   // session = task id for the code panel
     }
 
     if (toolCalls.length === 0) {
@@ -563,91 +654,165 @@ app.get("/api/file", (req, res) => {
 });
 
 // ===========================================================================
-// Phase 7 — task history + checkpoints
+// Phase 7 — task history + checkpoints (SQLite-backed)
 // ===========================================================================
 
-// Save / update a task (CODE session) to disk.
+// Save / update a task (CODE session).
 app.put("/api/tasks/:id", (req, res) => {
+  if (!db) return res.status(500).json({ error: "Database unavailable." });
   try {
-    ensureDir(TASKS_DIR);
     const id = req.params.id.replace(/[^\w.-]/g, "_");
-    const task = { id, ...req.body, updated: Date.now() };
-    fs.writeFileSync(path.join(TASKS_DIR, id + ".json"), JSON.stringify(task));
+    const b = req.body || {};
+    db.prepare(
+      `INSERT INTO tasks (id, title, mode, messages, pins, cost, tokens, updated)
+       VALUES (@id, @title, @mode, @messages, @pins, @cost, @tokens, @updated)
+       ON CONFLICT(id) DO UPDATE SET
+         title=@title, mode=@mode, messages=@messages, pins=@pins,
+         cost=@cost, tokens=@tokens, updated=@updated`
+    ).run({
+      id,
+      title: b.title || "Untitled task",
+      mode: b.mode || "plan",
+      messages: JSON.stringify(b.messages || []),
+      pins: JSON.stringify(b.pins || []),
+      cost: b.cost || 0,
+      tokens: b.tokens || 0,
+      updated: Date.now()
+    });
     res.json({ ok: true, id });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // List saved tasks (metadata only).
 app.get("/api/tasks", (_req, res) => {
+  if (!db) return res.json({ tasks: [] });
   try {
-    ensureDir(TASKS_DIR);
-    const tasks = fs.readdirSync(TASKS_DIR)
-      .filter(f => f.endsWith(".json"))
-      .map(f => { try { return JSON.parse(fs.readFileSync(path.join(TASKS_DIR, f), "utf8")); } catch { return null; } })
-      .filter(Boolean)
-      .map(t => ({ id: t.id, title: t.title || "Untitled task", updated: t.updated, mode: t.mode,
-                   messageCount: (t.messages || []).length }))
-      .sort((a, b) => b.updated - a.updated);
+    const rows = db.prepare(`SELECT id, title, mode, messages, updated FROM tasks ORDER BY updated DESC`).all();
+    const tasks = rows.map(r => ({
+      id: r.id, title: r.title || "Untitled task", updated: r.updated, mode: r.mode,
+      messageCount: (safeParse(r.messages, []) || []).length
+    }));
     res.json({ tasks });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Load a full task.
 app.get("/api/tasks/:id", (req, res) => {
+  if (!db) return res.status(404).json({ error: "Task not found." });
   try {
     const id = req.params.id.replace(/[^\w.-]/g, "_");
-    const data = fs.readFileSync(path.join(TASKS_DIR, id + ".json"), "utf8");
-    res.json(JSON.parse(data));
+    const r = db.prepare(`SELECT * FROM tasks WHERE id = ?`).get(id);
+    if (!r) return res.status(404).json({ error: "Task not found." });
+    res.json({
+      id: r.id, title: r.title, mode: r.mode,
+      messages: safeParse(r.messages, []), pins: safeParse(r.pins, []),
+      cost: r.cost, tokens: r.tokens, updated: r.updated
+    });
   } catch (e) { res.status(404).json({ error: "Task not found." }); }
 });
 
 app.delete("/api/tasks/:id", (req, res) => {
+  if (!db) return res.status(500).json({ error: "Database unavailable." });
   try {
     const id = req.params.id.replace(/[^\w.-]/g, "_");
-    fs.rmSync(path.join(TASKS_DIR, id + ".json"), { force: true });
-    fs.rmSync(path.join(CKPT_DIR, id), { recursive: true, force: true });
+    db.prepare(`DELETE FROM tasks WHERE id = ?`).run(id);
+    db.prepare(`DELETE FROM checkpoints WHERE task_id = ?`).run(id);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// List checkpoints for a task.
+// List checkpoints for a task (metadata only — the BLOB is fetched on rollback).
 app.get("/api/checkpoints/:taskId", (req, res) => {
+  if (!db) return res.json({ checkpoints: [] });
   try {
     const taskId = req.params.taskId.replace(/[^\w.-]/g, "_");
-    const dir = path.join(CKPT_DIR, taskId);
-    if (!fs.existsSync(dir)) return res.json({ checkpoints: [] });
-    const cps = fs.readdirSync(dir)
-      .filter(f => f.endsWith(".json"))
-      .map(f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")); } catch { return null; } })
-      .filter(Boolean)
-      .sort((a, b) => b.time - a.time);
-    res.json({ checkpoints: cps });
+    const rows = db.prepare(
+      `SELECT id, task_id, step, path, existed, time FROM checkpoints WHERE task_id = ? ORDER BY time DESC`
+    ).all(taskId);
+    const checkpoints = rows.map(r => ({
+      id: r.id, taskId: r.task_id, step: r.step, path: r.path, existed: !!r.existed, time: r.time
+    }));
+    res.json({ checkpoints });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Roll a single checkpoint back: restore (or delete) the file to its snapshot.
+// Roll a single checkpoint back: restore (or delete) the file from its snapshot.
 app.post("/api/checkpoints/:taskId/:id/rollback", (req, res) => {
+  if (!db) return res.status(500).json({ error: "Database unavailable." });
   try {
-    const taskId = req.params.taskId.replace(/[^\w.-]/g, "_");
     const id = req.params.id.replace(/[^\w.-]/g, "_");
-    const dir = path.join(CKPT_DIR, taskId);
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, id + ".json"), "utf8"));
+    const r = db.prepare(`SELECT * FROM checkpoints WHERE id = ?`).get(id);
+    if (!r) return res.status(404).json({ error: "Checkpoint not found." });
     const ws = getWorkspaceDir();
     const base = path.resolve(ws);
-    const target = path.resolve(base, meta.path);
+    const target = path.resolve(base, r.path);
     if (target !== base && !target.startsWith(base + path.sep))
       return res.status(403).json({ error: "Path outside workspace." });
-    if (meta.existed) fs.copyFileSync(path.join(dir, id + ".content"), target);
-    else fs.rmSync(target, { force: true });   // file didn't exist before — remove it
-    res.json({ ok: true, path: meta.path, action: meta.existed ? "restored" : "deleted" });
+    if (r.existed) {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, r.content);            // restore raw bytes from the BLOB
+    } else {
+      fs.rmSync(target, { force: true });             // file didn't exist before — remove it
+    }
+    res.json({ ok: true, path: r.path, action: r.existed ? "restored" : "deleted" });
   } catch (e) { res.status(500).json({ error: "Rollback failed: " + e.message }); }
 });
 
+// ===========================================================================
+// Usage summary (aggregated token + cost history)
+// ===========================================================================
+app.get("/api/usage/summary", (_req, res) => {
+  if (!db) return res.json({ totalCost: 0, totalTokens: 0, todayCost: 0, todayTokens: 0, byModel: [] });
+  try {
+    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+    const tot = db.prepare(
+      `SELECT COALESCE(SUM(cost),0) cost, COALESCE(SUM(prompt_tokens+completion_tokens),0) tok FROM chat_usage`
+    ).get();
+    const day = db.prepare(
+      `SELECT COALESCE(SUM(cost),0) cost, COALESCE(SUM(prompt_tokens+completion_tokens),0) tok
+       FROM chat_usage WHERE ts >= ?`
+    ).get(startOfDay.getTime());
+    const byModel = db.prepare(
+      `SELECT model, COALESCE(SUM(cost),0) cost, COALESCE(SUM(prompt_tokens+completion_tokens),0) tokens
+       FROM chat_usage GROUP BY model ORDER BY cost DESC LIMIT 5`
+    ).all();
+    res.json({
+      totalCost: tot.cost, totalTokens: tot.tok,
+      todayCost: day.cost, todayTokens: day.tok,
+      byModel: byModel.map(m => ({ model: m.model || "(unknown)", cost: m.cost, tokens: m.tokens }))
+    });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Cost + tokens for one session (task id for code, generated id for chat).
+app.get("/api/usage/session/:sessionId", (req, res) => {
+  if (!db) return res.json({ cost: 0, tokens: 0 });
+  try {
+    const r = db.prepare(
+      `SELECT COALESCE(SUM(cost),0) cost, COALESCE(SUM(prompt_tokens+completion_tokens),0) tok
+       FROM chat_usage WHERE session = ?`
+    ).get(req.params.sessionId);
+    res.json({ cost: r.cost, tokens: r.tok });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Truncate the usage history.
+app.delete("/api/usage", (_req, res) => {
+  if (!db) return res.status(500).json({ error: "Database unavailable." });
+  try { db.prepare(`DELETE FROM chat_usage`).run(); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // ---------------------------------------------------------------------------
+let dbPath = "(not initialized)";
+try { dbPath = initDb(); }
+catch (e) { console.error("  ⚠  Could not open the SQLite database: " + e.message); }
+
 app.listen(PORT, () => {
   const ws = getWorkspaceDir();
   console.log("\n  chatty backend  →  http://localhost:" + PORT);
   console.log("  workspace       →  " + ws);
+  console.log("  database        →  " + dbPath);
   if (!OPENROUTER_API_KEY) {
     console.log("  ⚠  No OPENROUTER_API_KEY found. Copy server/.env.example to server/.env and add your key.\n");
   } else {
