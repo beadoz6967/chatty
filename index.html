@@ -317,6 +317,32 @@
   }
   .banner.show { display: block; }
 
+  /* ---------- Code settings bar (mode + model selectors) ---------- */
+  .code-settings {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 20px; border-bottom: 1px solid rgba(180,220,255,0.12);
+    background: rgba(8,24,48,0.22);
+  }
+  .mode-sw { display: inline-flex; gap: 3px; padding: 3px;
+    background: rgba(8,24,48,0.45); border: 1px solid var(--glass-border); border-radius: 10px; }
+  .mseg { border: none; background: transparent; color: var(--ink-dim);
+    padding: 5px 16px; border-radius: 7px; cursor: pointer; font-size: 11px;
+    font-weight: 700; letter-spacing: 1px; text-transform: uppercase; transition: background 0.15s, color 0.15s; }
+  .mseg:hover { color: var(--ink); }
+  .mseg.active { background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep)); color: #20160a;
+    box-shadow: 0 3px 10px rgba(244,213,141,0.28); }
+  .mseg:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(244,213,141,0.4); }
+  .setting-group { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 160px; }
+  .setting-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--ink-dim); white-space: nowrap; font-weight: 600; }
+  .code-select {
+    flex: 1; min-width: 0;
+    background: rgba(8,24,48,0.45); border: 1px solid var(--glass-border);
+    border-radius: 9px; padding: 6px 8px; color: var(--ink); font-size: 12px;
+    font-family: inherit; transition: border-color 0.2s;
+  }
+  .code-select:focus-visible { outline: none; border-color: var(--gold); }
+
   /* ---------- Tool activity cards (CODE panel) ---------- */
   .iter-sep {
     display: flex; align-items: center; gap: 10px;
@@ -557,12 +583,26 @@
             <button class="btn ghost" id="codeClearBtn" type="button">clear</button>
           </div>
         </div>
+        <div class="code-settings">
+          <div class="mode-sw" role="group" aria-label="Agent mode">
+            <button class="mseg active" id="modePlan" type="button">Plan</button>
+            <button class="mseg" id="modeAct" type="button">Act</button>
+          </div>
+          <div class="setting-group">
+            <span class="setting-label">Plan model</span>
+            <select class="code-select" id="planModelSelect" title="Model used in Plan mode"></select>
+          </div>
+          <div class="setting-group">
+            <span class="setting-label">Act model</span>
+            <select class="code-select" id="actModelSelect" title="Model used in Act mode"></select>
+          </div>
+        </div>
         <div class="banner" id="codeBanner"></div>
         <div class="messages" id="codeMessages">
           <div class="empty" id="codeEmpty">
             <h2>Code Agent ✦</h2>
-            <p>Ask me to explore, understand, or plan changes to your workspace. I'll use read-only tools to investigate systematically before answering.</p>
-            <span class="pill">read-only · plan mode</span>
+            <p>Switch between <b>Plan</b> (read-only investigation → written plan) and <b>Act</b> (execution, write tools coming soon). Each mode uses its own model.</p>
+            <span class="pill">read-only · phase 2</span>
           </div>
         </div>
         <div class="composer">
@@ -577,11 +617,12 @@
 (function () {
   "use strict";
 
-  const LS_MODEL = "chatty.model";
-  const LS_GLOBAL = "chatty.globalRules";    // standing rules, every chat
-  const LS_PERCHAT = "chatty.perChatRules";  // rules for the active conversation
-  const LS_SYSTEM = "chatty.system";          // legacy single-prompt key (migrated below)
-  // The browser now talks to the local backend, which holds the OpenRouter key.
+  const LS_MODEL      = "chatty.model";
+  const LS_GLOBAL     = "chatty.globalRules";
+  const LS_PERCHAT    = "chatty.perChatRules";
+  const LS_SYSTEM     = "chatty.system";       // legacy key (migrated below)
+  const LS_PLAN_MODEL = "chatty.planModel";
+  const LS_ACT_MODEL  = "chatty.actModel";
   const API = "/api";
 
   // ---- state ----
@@ -592,12 +633,13 @@
   let abortController = null;
 
   // CODE panel state
-  let codeHistory = [];       // agent conversation {role, content/tool_calls}
+  let codeHistory = [];
   let codeStreaming = false;
   let codeAbortController = null;
-  let codeCurrentBubble = null;  // the <div> being streamed into right now
-  let codeCurrentRaw = "";       // raw text acc for current bubble (for renderMarkdown)
-  const toolCards = new Map();   // tool_call id → {card, statusEl, bodyPre}
+  let codeCurrentBubble = null;
+  let codeCurrentRaw = "";
+  const toolCards = new Map();
+  let codeMode = "plan";   // "plan" | "act"
 
   // ---- elements ----
   const $ = (id) => document.getElementById(id);
@@ -631,6 +673,10 @@
   const codeStopBtn = $("codeStopBtn");
   const codeClearBtn = $("codeClearBtn");
   const codeBannerEl = $("codeBanner");
+  const modePlanBtn = $("modePlan");
+  const modeActBtn = $("modeAct");
+  const planModelSelect = $("planModelSelect");
+  const actModelSelect = $("actModelSelect");
 
   // ===================== utilities =====================
   function showError(msg) {
@@ -791,6 +837,7 @@
       }
       renderModelList("");
       updateSelectedModelLabel();
+      populateCodeSelects();
     } catch (e) {
       modelStatusEl.textContent = "";
       modelListEl.innerHTML = '<div class="model-item"><div class="meta">Could not load models.</div></div>';
@@ -1050,6 +1097,39 @@
     clearError();
   });
 
+  // ===================== CODE PANEL — model selects + mode toggle =====================
+
+  function populateCodeSelects() {
+    const savedPlan = localStorage.getItem(LS_PLAN_MODEL) || "";
+    const savedAct  = localStorage.getItem(LS_ACT_MODEL)  || "";
+    [planModelSelect, actModelSelect].forEach((sel, i) => {
+      const saved = i === 0 ? savedPlan : savedAct;
+      sel.innerHTML = "";
+      for (const m of models) {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = (m.name || m.id).slice(0, 50);
+        if (m.id === saved) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      // If saved model not in list, fall back to first
+      if (!saved && models.length) sel.value = models[0].id;
+    });
+  }
+
+  planModelSelect.addEventListener("change", () => localStorage.setItem(LS_PLAN_MODEL, planModelSelect.value));
+  actModelSelect.addEventListener("change",  () => localStorage.setItem(LS_ACT_MODEL,  actModelSelect.value));
+
+  function setCodeMode(mode) {
+    codeMode = mode;
+    modePlanBtn.classList.toggle("active", mode === "plan");
+    modeActBtn.classList.toggle("active",  mode === "act");
+    modePlanBtn.setAttribute("aria-pressed", mode === "plan" ? "true" : "false");
+    modeActBtn.setAttribute("aria-pressed",  mode === "act"  ? "true" : "false");
+  }
+  modePlanBtn.addEventListener("click", () => setCodeMode("plan"));
+  modeActBtn.addEventListener("click",  () => setCodeMode("act"));
+
   // ===================== CODE PANEL =====================
 
   function showCodeError(msg) {
@@ -1181,7 +1261,11 @@
     if (codeStreaming) return;
     const text = codeInputEl.value.trim();
     if (!text) return;
-    if (!selectedModel) { showCodeError("Please pick a model first."); modelSearchEl.focus(); return; }
+    // Use the model selected for the current mode; fall back to CHAT model
+    const codeModel = codeMode === "act"
+      ? (actModelSelect.value  || selectedModel)
+      : (planModelSelect.value || selectedModel);
+    if (!codeModel) { showCodeError("Please pick a model first."); return; }
 
     clearCodeError();
     toolCards.clear();
@@ -1194,7 +1278,6 @@
     setCodeStreaming(true);
     codeAbortController = new AbortController();
 
-    // Global rules only for the CODE panel (per-chat rules for code come in Phase 3)
     const systemMessage = globalRulesEl.value.trim();
 
     let res;
@@ -1203,9 +1286,10 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: selectedModel,
+          model: codeModel,
           messages: codeHistory,
-          systemMessage
+          systemMessage,
+          mode: codeMode
         }),
         signal: codeAbortController.signal
       });
@@ -1246,6 +1330,11 @@
           try { evt = JSON.parse(raw); } catch (_) { continue; }
 
           switch (evt.type) {
+
+            case "mode":
+              // Backend echoes the resolved mode; use it to label the header pill
+              // (no DOM change needed in Phase 3 — the UI already shows it)
+              break;
 
             case "iteration":
               // New iteration → new assistant bubble

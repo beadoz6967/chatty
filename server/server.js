@@ -342,24 +342,23 @@ async function runAgentLoop({ model, messages, tools, maxIterations = 20 }, work
 }
 
 // ---- /api/agent endpoint ---------------------------------------------------
-// The CODE panel sends: { model, messages, systemMessage }
-// The backend prepends an agent context prefix to the system message, then
-// runs the full agent loop, streaming typed SSE events back to the browser.
+// The CODE panel sends: { model, messages, systemMessage, mode }
+// mode = "plan" (read-only, propose plan) | "act" (execute — write tools added in Phase 4)
 //
-// SSE event types:
-//   {type:"iteration", n:N}              — new loop iteration starting
-//   {type:"text", content:"..."}         — assistant token (stream into current bubble)
-//   {type:"tool_start", id, name, input} — tool about to execute
-//   {type:"tool_result", id, content}    — tool result (update the card)
-//   {type:"done"}                        — loop finished normally
-//   {type:"aborted"}                     — client cancelled
-//   {type:"error", message:"..."}        — loop error (shown in banner)
+// SSE event types: iteration, text, tool_start, tool_result, done, aborted, error
 
-const AGENT_SYSTEM_PREFIX =
+const AGENT_BASE =
   "You are an expert coding assistant with access to a local workspace.\n" +
-  "Tools available: list_dir, read_file, search (all read-only, all workspace-scoped).\n" +
-  "All paths you pass to tools must be relative to the workspace root.\n" +
-  "Investigate systematically before answering. Use multiple tool calls if needed.\n";
+  "Tools available: list_dir, read_file, search (all workspace-scoped; paths are relative to workspace root).\n";
+
+const MODE_PREFIX = {
+  plan:
+    "MODE: PLAN — read-only investigation.\n" +
+    "Explore the workspace thoroughly, then output a clear written plan. Do NOT modify any files.\n",
+  act:
+    "MODE: ACT — execute the task.\n" +
+    "Use tools methodically. Be precise. (Write/command tools unlock in the next phase.)\n"
+};
 
 app.post("/api/agent", async (req, res) => {
   if (!OPENROUTER_API_KEY) {
@@ -368,22 +367,17 @@ app.post("/api/agent", async (req, res) => {
     });
   }
 
-  const { model, messages, systemMessage } = req.body || {};
+  const { model, messages, systemMessage, mode = "plan" } = req.body || {};
   if (!model || !Array.isArray(messages)) {
     return res.status(400).json({ error: { message: "'model' and 'messages' are required." } });
   }
 
-  // Ensure workspace exists
   const workspaceDir = getWorkspaceDir();
-  if (!fs.existsSync(workspaceDir)) {
-    fs.mkdirSync(workspaceDir, { recursive: true });
-  }
+  if (!fs.existsSync(workspaceDir)) fs.mkdirSync(workspaceDir, { recursive: true });
 
-  // Compose the effective system message: agent prefix + user's global rules
   const userSys = (systemMessage || "").trim();
-  const effectiveSys = userSys
-    ? AGENT_SYSTEM_PREFIX + "\n" + userSys
-    : AGENT_SYSTEM_PREFIX;
+  const modeLine = MODE_PREFIX[mode] || MODE_PREFIX.plan;
+  const effectiveSys = AGENT_BASE + modeLine + (userSys ? "\n" + userSys : "");
 
   const fullMessages = [
     { role: "system", content: effectiveSys },
@@ -399,6 +393,9 @@ app.post("/api/agent", async (req, res) => {
 
   const controller = new AbortController();
   req.on("close", () => controller.abort());
+
+  // Send the resolved mode back to the frontend so it can label the UI correctly
+  sseWrite(res, { type: "mode", mode });
 
   await runAgentLoop(
     { model, messages: fullMessages, tools: TOOL_DEFINITIONS },
