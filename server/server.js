@@ -140,7 +140,6 @@ app.post("/api/chat", async (req, res) => {
       signal: controller.signal
     });
   } catch (_e) {
-    console.error('OpenRouter fetch error:', _e);
     return res.status(502).json({ error: { message: "Could not reach OpenRouter. Check the server's connection." } });
   }
 

@@ -1518,13 +1518,15 @@
     return "Active skills:\n" + on.map(s => "## " + s.name + "\n" + s.content.trim()).join("\n\n");
   }
 
-  // Effective system message for the CODE agent (global + skills + pinned files).
+  // Effective system message for the CODE agent (global + skills + per-chat rules + pinned files).
   function composeCodeSystem() {
     const layers = [];
     const g = globalRulesEl.value.trim();
     if (g) layers.push(g);
     const sk = composeSkills();
     if (sk) layers.push(sk);
+    const perChat = perChatRulesEl.value.trim();
+    if (perChat) layers.push(perChat);
     if (codePins.length) {
       layers.push("Attached files (the user pinned these for context):\n" +
         codePins.map(p => "=== " + p.path + " ===\n" + p.content).join("\n\n"));
