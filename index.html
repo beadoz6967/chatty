@@ -317,6 +317,63 @@
   }
   .banner.show { display: block; }
 
+  /* ---------- Tool activity cards (CODE panel) ---------- */
+  .iter-sep {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--ink-dim); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 4px 0;
+  }
+  .iter-sep::before, .iter-sep::after {
+    content: ""; flex: 1; height: 1px; background: rgba(180,220,255,0.12);
+  }
+
+  .tool-card {
+    border-radius: 13px;
+    border: 1px solid var(--glass-border);
+    background: rgba(80, 140, 210, 0.09);
+    overflow: hidden;
+    margin: 4px 0;
+    max-width: 84%;
+    align-self: flex-start;
+  }
+  .tool-card-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+  }
+  .tool-card-head:hover { background: rgba(120,180,240,0.12); }
+  .tool-icon { font-size: 13px; flex: 0 0 auto; }
+  .tool-name {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; font-weight: 600; color: var(--gold);
+    flex: 0 0 auto;
+  }
+  .tool-args {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; color: var(--ink-dim);
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tool-status { font-size: 11px; flex: 0 0 auto; }
+  .tool-status.running { color: var(--gold); }
+  .tool-status.done { color: #7ce0a8; }
+  .tool-status.error { color: var(--danger); }
+  .tool-chevron { font-size: 10px; color: var(--ink-dim); flex: 0 0 auto; transition: transform 0.2s; }
+  .tool-card.open .tool-chevron { transform: rotate(90deg); }
+  .tool-card-body {
+    display: none;
+    border-top: 1px solid rgba(180,220,255,0.10);
+    max-height: 280px; overflow-y: auto;
+  }
+  .tool-card.open .tool-card-body { display: block; }
+  .tool-card-body pre {
+    margin: 0; padding: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-all;
+    color: var(--ink-dim);
+  }
+
   /* per-chat rules inline editor */
   .rules-panel {
     display: none;
@@ -491,15 +548,26 @@
       </div>
       </main>
 
-      <!-- ----- CODE panel (agent — shell for now) ----- -->
+      <!-- ----- CODE panel (agent) ----- -->
       <section class="code glass" id="codePanel" role="tabpanel" hidden>
-        <div class="chat-head"><span class="title">code agent</span></div>
-        <div class="code-body">
-          <div class="empty" style="margin:auto;">
-            <h2>Agent panel</h2>
-            <p>The agentic coding assistant arrives in the next phase. For now, CHAT is fully live and the shared model selector &amp; global rules already work here too.</p>
-            <span class="pill">Phase 1 · shell</span>
+        <div class="chat-head">
+          <span class="title">code agent</span>
+          <div class="row">
+            <button class="btn ghost" id="codeStopBtn" type="button" style="display:none">■ stop</button>
+            <button class="btn ghost" id="codeClearBtn" type="button">clear</button>
           </div>
+        </div>
+        <div class="banner" id="codeBanner"></div>
+        <div class="messages" id="codeMessages">
+          <div class="empty" id="codeEmpty">
+            <h2>Code Agent ✦</h2>
+            <p>Ask me to explore, understand, or plan changes to your workspace. I'll use read-only tools to investigate systematically before answering.</p>
+            <span class="pill">read-only · plan mode</span>
+          </div>
+        </div>
+        <div class="composer">
+          <textarea class="control" id="codeInput" placeholder="Describe what you want to explore or understand…  (Enter to send · Shift+Enter for newline)" rows="1"></textarea>
+          <button class="btn gold send-btn" id="codeSendBtn" type="button">Send</button>
         </div>
       </section>
     </div>
@@ -519,9 +587,17 @@
   // ---- state ----
   let models = [];
   let selectedModel = localStorage.getItem(LS_MODEL) || "";
-  let history = [];           // {role, content}
+  let history = [];           // CHAT panel conversation {role, content}
   let streaming = false;
   let abortController = null;
+
+  // CODE panel state
+  let codeHistory = [];       // agent conversation {role, content/tool_calls}
+  let codeStreaming = false;
+  let codeAbortController = null;
+  let codeCurrentBubble = null;  // the <div> being streamed into right now
+  let codeCurrentRaw = "";       // raw text acc for current bubble (for renderMarkdown)
+  const toolCards = new Map();   // tool_call id → {card, statusEl, bodyPre}
 
   // ---- elements ----
   const $ = (id) => document.getElementById(id);
@@ -546,6 +622,15 @@
   const bannerEl = $("banner");
   const sidebar = $("sidebar");
   const mobileToggle = $("mobileToggle");
+
+  // Code panel elements
+  const codeMessagesEl = $("codeMessages");
+  const codeEmptyEl = $("codeEmpty");
+  const codeInputEl = $("codeInput");
+  const codeSendBtn = $("codeSendBtn");
+  const codeStopBtn = $("codeStopBtn");
+  const codeClearBtn = $("codeClearBtn");
+  const codeBannerEl = $("codeBanner");
 
   // ===================== utilities =====================
   function showError(msg) {
@@ -963,6 +1048,306 @@
     localStorage.removeItem(LS_PERCHAT);
     reflectPerChatState();
     clearError();
+  });
+
+  // ===================== CODE PANEL =====================
+
+  function showCodeError(msg) {
+    codeBannerEl.textContent = msg;
+    codeBannerEl.classList.add("show");
+    clearTimeout(showCodeError._t);
+    showCodeError._t = setTimeout(() => codeBannerEl.classList.remove("show"), 10000);
+  }
+  function clearCodeError() { codeBannerEl.classList.remove("show"); }
+
+  function codeScrollToBottom() { codeMessagesEl.scrollTop = codeMessagesEl.scrollHeight; }
+
+  // Add a user or assistant message bubble to the CODE thread.
+  function addCodeMessage(role, text) {
+    codeEmptyEl.style.display = "none";
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + role;
+
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = role === "user" ? "U" : "✦";
+
+    const col = document.createElement("div");
+    col.style.minWidth = "0";
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    if (role === "user") {
+      bubble.textContent = text;
+    } else {
+      bubble.innerHTML = text ? renderMarkdown(text) : '<span class="cursor"></span>';
+    }
+    col.appendChild(bubble);
+
+    if (role === "assistant") {
+      const tools = document.createElement("div");
+      tools.className = "msg-tools";
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "copy-btn";
+      copyBtn.type = "button";
+      copyBtn.textContent = "copy";
+      copyBtn.addEventListener("click", () => {
+        const raw = bubble.dataset.raw || bubble.textContent;
+        navigator.clipboard.writeText(raw).then(() => {
+          copyBtn.textContent = "copied ✓";
+          setTimeout(() => (copyBtn.textContent = "copy"), 1500);
+        }).catch(() => showCodeError("Couldn't copy to clipboard."));
+      });
+      tools.appendChild(copyBtn);
+      col.appendChild(tools);
+    }
+
+    wrap.appendChild(avatar);
+    wrap.appendChild(col);
+    codeMessagesEl.appendChild(wrap);
+    codeScrollToBottom();
+    return bubble;
+  }
+
+  // Add a subtle iteration separator line.
+  function addIterSep(n) {
+    if (n === 1) return; // no separator before the first iteration
+    const sep = document.createElement("div");
+    sep.className = "iter-sep";
+    sep.textContent = "· iteration " + n + " ·";
+    codeMessagesEl.appendChild(sep);
+    codeScrollToBottom();
+  }
+
+  // Add a tool activity card. Returns the card element so we can update it.
+  function addToolCard(id, name, input) {
+    // Summarise the key input arg for the header line
+    const inputSummary = input
+      ? Object.values(input).filter(Boolean).join("  ").slice(0, 80)
+      : "";
+
+    const card = document.createElement("div");
+    card.className = "tool-card";
+    card.innerHTML =
+      '<div class="tool-card-head">' +
+        '<span class="tool-icon">⚙</span>' +
+        '<span class="tool-name">' + escapeHtml(name) + '</span>' +
+        '<span class="tool-args">' + escapeHtml(inputSummary) + '</span>' +
+        '<span class="tool-status running">running…</span>' +
+        '<span class="tool-chevron">▸</span>' +
+      '</div>' +
+      '<div class="tool-card-body"><pre></pre></div>';
+
+    card.querySelector(".tool-card-head").addEventListener("click", () => {
+      card.classList.toggle("open");
+    });
+
+    codeMessagesEl.appendChild(card);
+    codeScrollToBottom();
+
+    toolCards.set(id, {
+      card,
+      statusEl: card.querySelector(".tool-status"),
+      bodyPre: card.querySelector(".tool-card-body pre")
+    });
+    return card;
+  }
+
+  // Update a tool card with the result (called when tool_result arrives).
+  function updateToolCard(id, content, isError) {
+    const entry = toolCards.get(id);
+    if (!entry) return;
+    entry.statusEl.className = "tool-status " + (isError ? "error" : "done");
+    entry.statusEl.textContent = isError ? "error" : "done";
+    entry.bodyPre.textContent = content || "(empty)";
+    // Auto-expand short results so the user can see them without clicking
+    if (content && content.length < 600) entry.card.classList.add("open");
+    codeScrollToBottom();
+  }
+
+  function setCodeStreaming(on) {
+    codeStreaming = on;
+    codeStopBtn.style.display = on ? "" : "none";
+    codeSendBtn.disabled = on;
+    if (!on) {
+      codeSendBtn.textContent = "Send";
+      codeCurrentBubble = null;
+      codeCurrentRaw = "";
+    }
+  }
+
+  // Main agent send — reads typed SSE events from /api/agent.
+  async function sendAgentMessage() {
+    if (codeStreaming) return;
+    const text = codeInputEl.value.trim();
+    if (!text) return;
+    if (!selectedModel) { showCodeError("Please pick a model first."); modelSearchEl.focus(); return; }
+
+    clearCodeError();
+    toolCards.clear();
+    codeInputEl.value = "";
+    codeInputEl.style.height = "auto";
+
+    addCodeMessage("user", text);
+    codeHistory.push({ role: "user", content: text });
+
+    setCodeStreaming(true);
+    codeAbortController = new AbortController();
+
+    // Global rules only for the CODE panel (per-chat rules for code come in Phase 3)
+    const systemMessage = globalRulesEl.value.trim();
+
+    let res;
+    try {
+      res = await fetch(API + "/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: selectedModel,
+          messages: codeHistory,
+          systemMessage
+        }),
+        signal: codeAbortController.signal
+      });
+    } catch (err) {
+      if (err.name === "AbortError") { setCodeStreaming(false); return; }
+      showCodeError("Network error: couldn't reach the local backend. Is it running?");
+      setCodeStreaming(false);
+      return;
+    }
+
+    if (!res.ok) {
+      let detail = "";
+      try { const j = await res.json(); detail = j.error?.message || ""; } catch (_) {}
+      showCodeError("Agent request failed (" + res.status + ")" + (detail ? ": " + detail : "."));
+      setCodeStreaming(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let assistantAccText = "";  // accumulate full assistant text for codeHistory
+
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data:")) continue;
+          const raw = trimmed.slice(5).trim();
+          let evt;
+          try { evt = JSON.parse(raw); } catch (_) { continue; }
+
+          switch (evt.type) {
+
+            case "iteration":
+              // New iteration → new assistant bubble
+              if (codeCurrentBubble && codeCurrentRaw) {
+                codeCurrentBubble.dataset.raw = codeCurrentRaw;
+                codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw);
+              }
+              addIterSep(evt.n);
+              codeCurrentBubble = addCodeMessage("assistant", "");
+              codeCurrentRaw = "";
+              break;
+
+            case "text":
+              // Append token to the current streaming bubble
+              if (!codeCurrentBubble) {
+                codeCurrentBubble = addCodeMessage("assistant", "");
+                codeCurrentRaw = "";
+              }
+              codeCurrentRaw += evt.content;
+              assistantAccText += evt.content;
+              codeCurrentBubble.dataset.raw = codeCurrentRaw;
+              codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw) + '<span class="cursor"></span>';
+              codeScrollToBottom();
+              break;
+
+            case "tool_start":
+              // Finalize current bubble (remove cursor), then add tool card
+              if (codeCurrentBubble) {
+                codeCurrentBubble.innerHTML = codeCurrentRaw
+                  ? renderMarkdown(codeCurrentRaw)
+                  : "<em>(no preamble)</em>";
+              }
+              addToolCard(evt.id, evt.name, evt.input);
+              break;
+
+            case "tool_result":
+              updateToolCard(evt.id, evt.content, false);
+              break;
+
+            case "done":
+              // Finalize the last bubble
+              if (codeCurrentBubble) {
+                if (codeCurrentRaw) {
+                  codeCurrentBubble.dataset.raw = codeCurrentRaw;
+                  codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw);
+                } else {
+                  codeCurrentBubble.innerHTML = "<em>(no response)</em>";
+                }
+              }
+              if (assistantAccText) {
+                codeHistory.push({ role: "assistant", content: assistantAccText });
+              }
+              break;
+
+            case "aborted":
+              if (codeCurrentRaw) {
+                codeCurrentBubble.dataset.raw = codeCurrentRaw;
+                codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw);
+                codeHistory.push({ role: "assistant", content: codeCurrentRaw });
+              } else if (codeCurrentBubble) {
+                codeCurrentBubble.closest(".msg")?.remove();
+              }
+              break;
+
+            case "error":
+              showCodeError(evt.message || "Agent error.");
+              if (codeCurrentBubble && !codeCurrentRaw) {
+                codeCurrentBubble.closest(".msg")?.remove();
+              }
+              break;
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        showCodeError("Stream error: " + err.message);
+      }
+    } finally {
+      setCodeStreaming(false);
+    }
+  }
+
+  // Code panel event wiring
+  codeSendBtn.addEventListener("click", sendAgentMessage);
+  codeStopBtn.addEventListener("click", () => { if (codeAbortController) codeAbortController.abort(); });
+
+  codeInputEl.addEventListener("input", () => {
+    codeInputEl.style.height = "auto";
+    codeInputEl.style.height = Math.min(codeInputEl.scrollHeight, 200) + "px";
+  });
+  codeInputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAgentMessage(); }
+  });
+
+  codeClearBtn.addEventListener("click", () => {
+    if ((codeHistory.length) && !confirm("Clear this agent conversation?")) return;
+    codeHistory = [];
+    toolCards.clear();
+    codeMessagesEl.innerHTML = "";
+    codeMessagesEl.appendChild(codeEmptyEl);
+    codeEmptyEl.style.display = "";
+    clearCodeError();
   });
 
   // ===================== mobile =====================
