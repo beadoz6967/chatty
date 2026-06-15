@@ -1,0 +1,17 @@
+{
+  "name": "chatty-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Localhost backend for the chatty OpenRouter app. Phase 1: serves the frontend, holds the API key, proxies models, and streams chat completions.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

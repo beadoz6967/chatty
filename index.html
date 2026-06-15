@@ -1,0 +1,1453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>chatty · openrouter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --gold: #f4d58d;
+    --gold-bright: #ffe6a8;
+    --gold-deep: #c9a253;
+    --ink: #eaf4ff;
+    --ink-dim: #a7c2dd;
+    --glass: rgba(20, 44, 74, 0.34);
+    --glass-strong: rgba(16, 38, 66, 0.55);
+    --glass-border: rgba(180, 220, 255, 0.22);
+    --glow: rgba(120, 190, 255, 0.35);
+    --user-bubble: rgba(244, 213, 141, 0.16);
+    --ai-bubble: rgba(120, 180, 240, 0.13);
+    --danger: #ffb4b4;
+    --radius: 20px;
+    --shadow: 0 18px 50px rgba(0, 14, 38, 0.45);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; margin: 0; }
+
+  body {
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    color: var(--ink);
+    background: #06122a;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Atmospheric underwater background ---------- */
+  .bg {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    background:
+      radial-gradient(1200px 800px at 20% -10%, #2a6db0 0%, rgba(42,109,176,0) 60%),
+      radial-gradient(1000px 900px at 85% 10%, #1b8fb0 0%, rgba(27,143,176,0) 55%),
+      radial-gradient(1400px 1000px at 50% 120%, #0a2a55 0%, rgba(10,42,85,0) 60%),
+      linear-gradient(180deg, #0c2f5e 0%, #0a1f44 45%, #050f26 100%);
+  }
+  .bg::after {
+    /* hazy glow shimmer */
+    content: "";
+    position: absolute;
+    inset: -20%;
+    background:
+      radial-gradient(600px 600px at 30% 30%, rgba(150,210,255,0.20), transparent 70%),
+      radial-gradient(500px 500px at 70% 60%, rgba(244,213,141,0.10), transparent 70%);
+    filter: blur(20px);
+    animation: drift 26s ease-in-out infinite alternate;
+  }
+  .blob {
+    position: fixed;
+    z-index: -1;
+    border-radius: 50%;
+    filter: blur(60px);
+    opacity: 0.5;
+    pointer-events: none;
+  }
+  .blob.b1 { width: 480px; height: 480px; left: -120px; top: -100px;
+    background: radial-gradient(circle, rgba(110,200,255,0.55), transparent 70%);
+    animation: float1 30s ease-in-out infinite alternate; }
+  .blob.b2 { width: 520px; height: 520px; right: -140px; bottom: -160px;
+    background: radial-gradient(circle, rgba(70,150,220,0.5), transparent 70%);
+    animation: float2 36s ease-in-out infinite alternate; }
+  .blob.b3 { width: 360px; height: 360px; right: 20%; top: 8%;
+    background: radial-gradient(circle, rgba(244,213,141,0.22), transparent 70%);
+    animation: float1 40s ease-in-out infinite alternate; }
+
+  @keyframes drift { from { transform: translate3d(-2%, -1%, 0) scale(1); } to { transform: translate3d(3%, 2%, 0) scale(1.08); } }
+  @keyframes float1 { from { transform: translate(0,0); } to { transform: translate(40px, 60px); } }
+  @keyframes float2 { from { transform: translate(0,0); } to { transform: translate(-50px, -40px); } }
+
+  /* ---------- Layout ---------- */
+  .app {
+    height: 100dvh;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: clamp(10px, 2vw, 22px);
+    display: grid;
+    grid-template-columns: 320px 1fr;
+    gap: 16px;
+  }
+
+  .glass {
+    background: var(--glass);
+    backdrop-filter: blur(22px) saturate(150%);
+    -webkit-backdrop-filter: blur(22px) saturate(150%);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.18), inset 0 0 30px rgba(120,190,255,0.06);
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+    overflow-y: auto;
+    min-height: 0;
+  }
+
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand h1 {
+    font-family: "Fraunces", serif;
+    font-weight: 700;
+    font-size: 30px;
+    margin: 0;
+    letter-spacing: 0.5px;
+    background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 0 26px rgba(244,213,141,0.35);
+  }
+  .brand .sub { font-size: 11px; letter-spacing: 2px; text-transform: uppercase; color: var(--ink-dim); }
+
+  .field { display: flex; flex-direction: column; gap: 7px; }
+  .field > label {
+    font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--gold); font-weight: 600;
+  }
+
+  input, textarea, select, button {
+    font-family: inherit;
+    color: var(--ink);
+    font-size: 14px;
+  }
+
+  .control {
+    width: 100%;
+    background: rgba(8, 24, 48, 0.45);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    padding: 11px 12px;
+    color: var(--ink);
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+  }
+  .control::placeholder { color: rgba(167,194,221,0.6); }
+  .control:focus-visible, .control:focus {
+    outline: none;
+    border-color: var(--gold);
+    box-shadow: 0 0 0 3px rgba(244,213,141,0.22), inset 0 0 18px rgba(120,190,255,0.08);
+    background: rgba(10, 30, 58, 0.6);
+  }
+  textarea.control { resize: vertical; min-height: 64px; line-height: 1.5; }
+
+  .row { display: flex; gap: 8px; align-items: center; }
+
+  .btn {
+    border: 1px solid var(--glass-border);
+    background: rgba(120,180,240,0.12);
+    border-radius: 12px;
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: transform 0.12s ease, box-shadow 0.2s, background 0.2s, border-color 0.2s;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .btn:hover { background: rgba(120,180,240,0.22); border-color: rgba(180,220,255,0.4); }
+  .btn:active { transform: translateY(1px) scale(0.99); }
+  .btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(244,213,141,0.35); }
+  .btn.ghost { background: transparent; font-size: 12px; padding: 6px 10px; color: var(--ink-dim); }
+  .btn.ghost:hover { color: var(--ink); }
+  .btn.gold {
+    background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep));
+    color: #20160a; border-color: rgba(255,230,168,0.5); font-weight: 600;
+    box-shadow: 0 6px 20px rgba(244,213,141,0.3);
+  }
+  .btn.gold:hover { box-shadow: 0 8px 28px rgba(244,213,141,0.45); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+
+  /* model selector */
+  .model-box { position: relative; }
+  #modelSearch { width: 100%; }
+  .model-list {
+    margin-top: 8px;
+    max-height: 320px;
+    overflow-y: auto;
+    border-radius: 12px;
+    border: 1px solid var(--glass-border);
+    background: rgba(6, 18, 38, 0.5);
+  }
+  .model-item {
+    padding: 9px 11px;
+    cursor: pointer;
+    border-bottom: 1px solid rgba(180,220,255,0.08);
+    transition: background 0.15s;
+  }
+  .model-item:last-child { border-bottom: none; }
+  .model-item:hover { background: rgba(120,180,240,0.16); }
+  .model-item.active { background: rgba(244,213,141,0.16); }
+  .model-item .name { font-size: 13px; font-weight: 500; }
+  .model-item .meta { font-size: 11px; color: var(--ink-dim); margin-top: 2px; }
+  .model-item.active .meta { color: var(--gold); }
+
+  .selected-model {
+    font-size: 12px; color: var(--ink-dim);
+    background: rgba(244,213,141,0.10);
+    border: 1px solid rgba(244,213,141,0.25);
+    border-radius: 10px; padding: 8px 10px;
+  }
+  .selected-model b { color: var(--gold); font-weight: 600; }
+
+  .status-line { font-size: 11px; color: var(--ink-dim); }
+
+  /* ---------- Chat panel ---------- */
+  .chat {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  .chat-head {
+    padding: 14px 20px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    border-bottom: 1px solid rgba(180,220,255,0.12);
+  }
+  .chat-head .title { font-family: "Fraunces", serif; font-size: 18px; color: var(--gold); }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 22px clamp(14px, 3vw, 30px);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 0;
+    scroll-behavior: smooth;
+  }
+
+  .empty {
+    margin: auto;
+    text-align: center;
+    color: var(--ink-dim);
+    max-width: 380px;
+  }
+  .empty h2 { font-family: "Fraunces", serif; color: var(--gold); font-weight: 600; margin-bottom: 6px; }
+
+  .msg { display: flex; gap: 10px; max-width: 84%; animation: rise 0.4s ease both; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg.assistant { align-self: flex-start; }
+
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+  .avatar {
+    flex: 0 0 auto;
+    width: 32px; height: 32px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 14px; font-weight: 600;
+    border: 1px solid var(--glass-border);
+  }
+  .msg.user .avatar { background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep)); color:#20160a; }
+  .msg.assistant .avatar { background: rgba(120,180,240,0.25); color: var(--ink); }
+
+  .bubble {
+    position: relative;
+    padding: 12px 15px;
+    border-radius: 16px;
+    line-height: 1.6;
+    border: 1px solid var(--glass-border);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.1);
+    word-wrap: break-word;
+    overflow-wrap: anywhere;
+  }
+  .msg.user .bubble { background: var(--user-bubble); border-color: rgba(244,213,141,0.3); border-top-right-radius: 5px; }
+  .msg.assistant .bubble { background: var(--ai-bubble); border-top-left-radius: 5px; }
+
+  .bubble p { margin: 0 0 8px; }
+  .bubble p:last-child { margin-bottom: 0; }
+  .bubble pre {
+    background: rgba(4,14,30,0.7);
+    border: 1px solid rgba(180,220,255,0.16);
+    border-radius: 10px;
+    padding: 12px;
+    overflow-x: auto;
+    margin: 8px 0;
+  }
+  .bubble code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+  .bubble p code, .bubble li code { background: rgba(4,14,30,0.55); padding: 1px 5px; border-radius: 5px; }
+  .bubble ul, .bubble ol { margin: 6px 0; padding-left: 22px; }
+
+  .msg-tools { margin-top: 6px; display: flex; gap: 6px; opacity: 0; transition: opacity 0.2s; }
+  .msg:hover .msg-tools, .msg-tools:focus-within { opacity: 1; }
+  .copy-btn {
+    font-size: 11px; padding: 4px 9px; border-radius: 8px;
+    background: rgba(120,180,240,0.12); border: 1px solid var(--glass-border);
+    color: var(--ink-dim); cursor: pointer; transition: background 0.15s, color 0.15s;
+  }
+  .copy-btn:hover { background: rgba(120,180,240,0.25); color: var(--ink); }
+  .copy-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(244,213,141,0.4); }
+
+  .cursor { display: inline-block; width: 7px; height: 1.05em; vertical-align: text-bottom;
+    background: var(--gold); border-radius: 2px; margin-left: 2px; animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* error toast / banner */
+  .banner {
+    margin: 0 clamp(14px,3vw,30px);
+    padding: 11px 14px; border-radius: 12px;
+    background: rgba(120, 30, 40, 0.4);
+    border: 1px solid rgba(255,180,180,0.4);
+    color: var(--danger); font-size: 13px;
+    display: none; animation: rise 0.3s ease both;
+  }
+  .banner.show { display: block; }
+
+  /* ---------- Code settings bar (mode + model selectors) ---------- */
+  .code-settings {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 20px; border-bottom: 1px solid rgba(180,220,255,0.12);
+    background: rgba(8,24,48,0.22);
+  }
+  .mode-sw { display: inline-flex; gap: 3px; padding: 3px;
+    background: rgba(8,24,48,0.45); border: 1px solid var(--glass-border); border-radius: 10px; }
+  .mseg { border: none; background: transparent; color: var(--ink-dim);
+    padding: 5px 16px; border-radius: 7px; cursor: pointer; font-size: 11px;
+    font-weight: 700; letter-spacing: 1px; text-transform: uppercase; transition: background 0.15s, color 0.15s; }
+  .mseg:hover { color: var(--ink); }
+  .mseg.active { background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep)); color: #20160a;
+    box-shadow: 0 3px 10px rgba(244,213,141,0.28); }
+  .mseg:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(244,213,141,0.4); }
+  .setting-group { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 160px; }
+  .setting-label { font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--ink-dim); white-space: nowrap; font-weight: 600; }
+  .code-select {
+    flex: 1; min-width: 0;
+    background: rgba(8,24,48,0.45); border: 1px solid var(--glass-border);
+    border-radius: 9px; padding: 6px 8px; color: var(--ink); font-size: 12px;
+    font-family: inherit; transition: border-color 0.2s;
+  }
+  .code-select:focus-visible { outline: none; border-color: var(--gold); }
+
+  /* ---------- Tool activity cards (CODE panel) ---------- */
+  .iter-sep {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--ink-dim); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 4px 0;
+  }
+  .iter-sep::before, .iter-sep::after {
+    content: ""; flex: 1; height: 1px; background: rgba(180,220,255,0.12);
+  }
+
+  .tool-card {
+    border-radius: 13px;
+    border: 1px solid var(--glass-border);
+    background: rgba(80, 140, 210, 0.09);
+    overflow: hidden;
+    margin: 4px 0;
+    max-width: 84%;
+    align-self: flex-start;
+  }
+  .tool-card-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 12px; cursor: pointer;
+    user-select: none;
+    transition: background 0.15s;
+  }
+  .tool-card-head:hover { background: rgba(120,180,240,0.12); }
+  .tool-icon { font-size: 13px; flex: 0 0 auto; }
+  .tool-name {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; font-weight: 600; color: var(--gold);
+    flex: 0 0 auto;
+  }
+  .tool-args {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11px; color: var(--ink-dim);
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tool-status { font-size: 11px; flex: 0 0 auto; }
+  .tool-status.running { color: var(--gold); }
+  .tool-status.done { color: #7ce0a8; }
+  .tool-status.error { color: var(--danger); }
+  .tool-chevron { font-size: 10px; color: var(--ink-dim); flex: 0 0 auto; transition: transform 0.2s; }
+  .tool-card.open .tool-chevron { transform: rotate(90deg); }
+  .tool-card-body {
+    display: none;
+    border-top: 1px solid rgba(180,220,255,0.10);
+    max-height: 280px; overflow-y: auto;
+  }
+  .tool-card.open .tool-card-body { display: block; }
+  .tool-card-body pre {
+    margin: 0; padding: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-all;
+    color: var(--ink-dim);
+  }
+
+  /* per-chat rules inline editor */
+  .rules-panel {
+    display: none;
+    flex-direction: column;
+    gap: 7px;
+    padding: 14px clamp(14px, 3vw, 30px);
+    border-bottom: 1px solid rgba(180,220,255,0.12);
+    background: rgba(244,213,141,0.05);
+    animation: rise 0.3s ease both;
+  }
+  .rules-panel.show { display: flex; }
+  .rules-panel label {
+    font-size: 11px; letter-spacing: 1.4px; text-transform: uppercase;
+    color: var(--gold); font-weight: 600;
+  }
+  .rules-panel textarea { min-height: 72px; }
+  #perChatToggle.dirty { color: var(--gold); border-color: rgba(244,213,141,0.4); background: rgba(244,213,141,0.12); }
+
+  /* composer */
+  .composer {
+    padding: 14px clamp(14px,3vw,22px);
+    border-top: 1px solid rgba(180,220,255,0.12);
+    display: flex; gap: 10px; align-items: flex-end;
+  }
+  .composer textarea {
+    flex: 1; min-height: 50px; max-height: 200px; resize: none;
+  }
+  .send-btn { height: 50px; padding: 0 22px; font-size: 15px; }
+
+  .spinner {
+    width: 15px; height: 15px; border-radius: 50%;
+    border: 2px solid rgba(32,22,10,0.3); border-top-color: #20160a;
+    display: inline-block; animation: spin 0.7s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: rgba(150,200,255,0.22); border-radius: 10px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(150,200,255,0.4); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  .mobile-toggle { display: none; }
+
+  /* ---------- Workspace column + panel switch ---------- */
+  .workspace { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .workspace > .chat, .workspace > .code { flex: 1; min-height: 0; }
+
+  .panel-switch {
+    display: inline-flex; gap: 4px; padding: 4px; align-self: flex-start;
+    background: rgba(8, 24, 48, 0.4);
+    border: 1px solid var(--glass-border);
+    border-radius: 14px;
+  }
+  .seg {
+    border: none; background: transparent; color: var(--ink-dim);
+    padding: 8px 22px; border-radius: 10px; cursor: pointer;
+    font-weight: 600; letter-spacing: 1.5px; font-size: 12px;
+    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  }
+  .seg:hover { color: var(--ink); }
+  .seg.active {
+    background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep));
+    color: #20160a; box-shadow: 0 4px 14px rgba(244,213,141,0.3);
+  }
+  .seg:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(244,213,141,0.35); }
+
+  /* CODE panel (shell for now) */
+  .code { display: flex; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
+  .code .chat-head .title::before { content: "⌘ "; }
+  .code-body { flex: 1; display: flex; padding: 24px; min-height: 0; overflow: auto; }
+  .pill {
+    display: inline-block; margin-top: 10px; padding: 4px 12px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    background: rgba(120,180,240,0.14); border: 1px solid var(--glass-border); color: var(--ink-dim);
+  }
+
+  /* Backend status indicator */
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 7px; vertical-align: middle; background: var(--ink-dim);
+    box-shadow: 0 0 8px currentColor; }
+  .status-dot.ok { background: #7ce0a8; color: #7ce0a8; }
+  .status-dot.warn { background: var(--gold); color: var(--gold); }
+  .status-dot.bad { background: var(--danger); color: var(--danger); }
+
+  /* ---------- Responsive ---------- */
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    .sidebar { max-height: 42vh; }
+    .sidebar.collapsed { display: none; }
+    .mobile-toggle { display: inline-flex; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, .bg::after, .blob { animation: none !important; transition: none !important; scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+  <div class="bg"></div>
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+
+  <div class="app">
+    <!-- ================= SIDEBAR ================= -->
+    <aside class="sidebar glass" id="sidebar">
+      <div class="brand">
+        <h1>chatty</h1>
+        <span class="sub">openrouter</span>
+      </div>
+
+      <div class="field">
+        <label>Backend</label>
+        <div class="selected-model" id="backendStatus"><span class="status-dot"></span>Connecting to localhost…</div>
+        <span class="status-line">Your OpenRouter key lives in <b>server/.env</b>, never in the browser.</span>
+      </div>
+
+      <div class="field model-box">
+        <label for="modelSearch">Model</label>
+        <div class="selected-model" id="selectedModel">No model selected</div>
+        <input class="control" id="modelSearch" type="text" placeholder="Search hundreds of models…" autocomplete="off" />
+        <div class="model-list" id="modelList">
+          <div class="model-item"><div class="meta">Loading models…</div></div>
+        </div>
+        <span class="status-line" id="modelStatus"></span>
+      </div>
+
+      <div class="field">
+        <label for="globalRules">Global System Rules</label>
+        <textarea class="control" id="globalRules" placeholder="Standing instructions applied to every chat…">You are a helpful, thoughtful assistant.</textarea>
+        <span class="status-line">Applied to every conversation.</span>
+      </div>
+    </aside>
+
+    <!-- ================= WORKSPACE (CHAT / CODE) ================= -->
+    <div class="workspace">
+      <div class="panel-switch" role="tablist" aria-label="Panel">
+        <button class="seg active" id="tabChat" type="button" role="tab" aria-selected="true" aria-controls="chatPanel">CHAT</button>
+        <button class="seg" id="tabCode" type="button" role="tab" aria-selected="false" aria-controls="codePanel">CODE</button>
+      </div>
+
+      <!-- ----- CHAT panel (plain conversation) ----- -->
+      <main class="chat glass" id="chatPanel" role="tabpanel">
+      <div class="chat-head">
+        <span class="title">conversation</span>
+        <div class="row">
+          <button class="btn ghost mobile-toggle" id="mobileToggle" type="button">☰ settings</button>
+          <button class="btn ghost" id="perChatToggle" type="button" aria-expanded="false" aria-controls="rulesPanel">✎ chat rules</button>
+          <button class="btn ghost" id="clearChatBtn" type="button">clear chat</button>
+        </div>
+      </div>
+
+      <div class="rules-panel" id="rulesPanel">
+        <label for="perChatRules">Per-chat System Rules</label>
+        <textarea class="control" id="perChatRules" placeholder="Instructions for THIS conversation only…"></textarea>
+        <span class="status-line">Applies only to the current conversation, appended below the global rules.</span>
+      </div>
+
+      <div class="banner" id="banner"></div>
+
+      <div class="messages" id="messages">
+        <div class="empty" id="emptyState">
+          <h2>Welcome aboard ✦</h2>
+          <p>Pick a model and start chatting. Replies stream in real time, routed through your local backend.</p>
+        </div>
+      </div>
+
+      <div class="composer">
+        <textarea class="control" id="input" placeholder="Type a message…  (Enter to send · Shift+Enter for newline)" rows="1"></textarea>
+        <button class="btn gold send-btn" id="sendBtn" type="button">Send</button>
+      </div>
+      </main>
+
+      <!-- ----- CODE panel (agent) ----- -->
+      <section class="code glass" id="codePanel" role="tabpanel" hidden>
+        <div class="chat-head">
+          <span class="title">code agent</span>
+          <div class="row">
+            <button class="btn ghost" id="codeStopBtn" type="button" style="display:none">■ stop</button>
+            <button class="btn ghost" id="codeClearBtn" type="button">clear</button>
+          </div>
+        </div>
+        <div class="code-settings">
+          <div class="mode-sw" role="group" aria-label="Agent mode">
+            <button class="mseg active" id="modePlan" type="button">Plan</button>
+            <button class="mseg" id="modeAct" type="button">Act</button>
+          </div>
+          <div class="setting-group">
+            <span class="setting-label">Plan model</span>
+            <select class="code-select" id="planModelSelect" title="Model used in Plan mode"></select>
+          </div>
+          <div class="setting-group">
+            <span class="setting-label">Act model</span>
+            <select class="code-select" id="actModelSelect" title="Model used in Act mode"></select>
+          </div>
+        </div>
+        <div class="banner" id="codeBanner"></div>
+        <div class="messages" id="codeMessages">
+          <div class="empty" id="codeEmpty">
+            <h2>Code Agent ✦</h2>
+            <p>Switch between <b>Plan</b> (read-only investigation → written plan) and <b>Act</b> (execution, write tools coming soon). Each mode uses its own model.</p>
+            <span class="pill">read-only · phase 2</span>
+          </div>
+        </div>
+        <div class="composer">
+          <textarea class="control" id="codeInput" placeholder="Describe what you want to explore or understand…  (Enter to send · Shift+Enter for newline)" rows="1"></textarea>
+          <button class="btn gold send-btn" id="codeSendBtn" type="button">Send</button>
+        </div>
+      </section>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  const LS_MODEL      = "chatty.model";
+  const LS_GLOBAL     = "chatty.globalRules";
+  const LS_PERCHAT    = "chatty.perChatRules";
+  const LS_SYSTEM     = "chatty.system";       // legacy key (migrated below)
+  const LS_PLAN_MODEL = "chatty.planModel";
+  const LS_ACT_MODEL  = "chatty.actModel";
+  const API = "/api";
+
+  // ---- state ----
+  let models = [];
+  let selectedModel = localStorage.getItem(LS_MODEL) || "";
+  let history = [];           // CHAT panel conversation {role, content}
+  let streaming = false;
+  let abortController = null;
+
+  // CODE panel state
+  let codeHistory = [];
+  let codeStreaming = false;
+  let codeAbortController = null;
+  let codeCurrentBubble = null;
+  let codeCurrentRaw = "";
+  const toolCards = new Map();
+  let codeMode = "plan";   // "plan" | "act"
+
+  // ---- elements ----
+  const $ = (id) => document.getElementById(id);
+  const backendStatusEl = $("backendStatus");
+  const tabChat = $("tabChat");
+  const tabCode = $("tabCode");
+  const chatPanel = $("chatPanel");
+  const codePanel = $("codePanel");
+  const modelSearchEl = $("modelSearch");
+  const modelListEl = $("modelList");
+  const modelStatusEl = $("modelStatus");
+  const selectedModelEl = $("selectedModel");
+  const globalRulesEl = $("globalRules");
+  const perChatRulesEl = $("perChatRules");
+  const perChatToggle = $("perChatToggle");
+  const rulesPanel = $("rulesPanel");
+  const messagesEl = $("messages");
+  const emptyState = $("emptyState");
+  const inputEl = $("input");
+  const sendBtn = $("sendBtn");
+  const clearChatBtn = $("clearChatBtn");
+  const bannerEl = $("banner");
+  const sidebar = $("sidebar");
+  const mobileToggle = $("mobileToggle");
+
+  // Code panel elements
+  const codeMessagesEl = $("codeMessages");
+  const codeEmptyEl = $("codeEmpty");
+  const codeInputEl = $("codeInput");
+  const codeSendBtn = $("codeSendBtn");
+  const codeStopBtn = $("codeStopBtn");
+  const codeClearBtn = $("codeClearBtn");
+  const codeBannerEl = $("codeBanner");
+  const modePlanBtn = $("modePlan");
+  const modeActBtn = $("modeAct");
+  const planModelSelect = $("planModelSelect");
+  const actModelSelect = $("actModelSelect");
+
+  // ===================== utilities =====================
+  function showError(msg) {
+    bannerEl.textContent = msg;
+    bannerEl.classList.add("show");
+    clearTimeout(showError._t);
+    showError._t = setTimeout(() => bannerEl.classList.remove("show"), 8000);
+  }
+  function clearError() { bannerEl.classList.remove("show"); }
+
+  function escapeHtml(s) {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  // tiny, safe markdown -> html (code blocks, inline code, bold, italics, lists, paragraphs)
+  function renderMarkdown(text) {
+    const blocks = [];
+    // fenced code blocks
+    let t = text.replace(/```[a-zA-Z0-9]*\n?([\s\S]*?)```/g, (m, code) => {
+      blocks.push("<pre><code>" + escapeHtml(code.replace(/\n$/, "")) + "</code></pre>");
+      return "" + (blocks.length - 1) + "";
+    });
+    t = escapeHtml(t);
+    t = t.replace(/`([^`]+)`/g, "<code>$1</code>");
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+
+    // paragraphs & lists
+    const lines = t.split(/\n/);
+    let html = "", listOpen = false;
+    const flush = () => { if (listOpen) { html += "</ul>"; listOpen = false; } };
+    let para = [];
+    const flushPara = () => {
+      if (para.length) { html += "<p>" + para.join("<br>") + "</p>"; para = []; }
+    };
+    for (const line of lines) {
+      if (/^\d+$/.test(line.trim())) {
+        flushPara(); flush();
+        html += blocks[parseInt(line.trim().replace(//g, ""), 10)];
+      } else if (/^\s*[-*]\s+/.test(line)) {
+        flushPara();
+        if (!listOpen) { html += "<ul>"; listOpen = true; }
+        html += "<li>" + line.replace(/^\s*[-*]\s+/, "") + "</li>";
+      } else if (line.trim() === "") {
+        flushPara(); flush();
+      } else {
+        para.push(line);
+      }
+    }
+    flushPara(); flush();
+    // restore any leftover code placeholders inside paragraphs
+    html = html.replace(/(\d+)/g, (m, i) => blocks[parseInt(i, 10)]);
+    return html;
+  }
+
+  function scrollToBottom() {
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // ===================== backend status =====================
+  function setBackendStatus(kind, text) {
+    backendStatusEl.innerHTML = '<span class="status-dot ' + kind + '"></span>' + text;
+  }
+  async function checkBackend() {
+    try {
+      const r = await fetch(API + "/health");
+      const j = await r.json();
+      if (j.ok && j.hasKey) setBackendStatus("ok", "Connected · key loaded");
+      else if (j.ok) setBackendStatus("warn", "Connected · no key in server/.env");
+      else setBackendStatus("bad", "Backend reachable but unhealthy");
+    } catch (_e) {
+      setBackendStatus("bad", "Backend offline — run <b>npm start</b>");
+    }
+  }
+
+  // ===================== panel toggle (CHAT / CODE) =====================
+  function setPanel(which) {
+    const isChat = which === "chat";
+    tabChat.classList.toggle("active", isChat);
+    tabCode.classList.toggle("active", !isChat);
+    tabChat.setAttribute("aria-selected", isChat ? "true" : "false");
+    tabCode.setAttribute("aria-selected", !isChat ? "true" : "false");
+    chatPanel.hidden = !isChat;
+    codePanel.hidden = isChat;
+  }
+  tabChat.addEventListener("click", () => setPanel("chat"));
+  tabCode.addEventListener("click", () => setPanel("code"));
+
+  // ===================== system rules (two layers) =====================
+  // Layer 1 — GLOBAL: standing rules applied to every conversation.
+  // Layer 2 — PER-CHAT: rules tied to the active conversation only.
+  // (A future "skills" layer will slot between these in composeSystemMessage.)
+
+  // Load GLOBAL (migrating the legacy single-prompt key if present).
+  const legacy = localStorage.getItem(LS_SYSTEM);
+  const storedGlobal = localStorage.getItem(LS_GLOBAL);
+  if (storedGlobal !== null) {
+    globalRulesEl.value = storedGlobal;
+  } else if (legacy !== null) {
+    globalRulesEl.value = legacy;
+    localStorage.setItem(LS_GLOBAL, legacy);
+    localStorage.removeItem(LS_SYSTEM);
+  }
+  globalRulesEl.addEventListener("input", () => {
+    localStorage.setItem(LS_GLOBAL, globalRulesEl.value);
+  });
+
+  // Load PER-CHAT for the active conversation, and reflect dirty state on the toggle.
+  perChatRulesEl.value = localStorage.getItem(LS_PERCHAT) || "";
+  function reflectPerChatState() {
+    perChatToggle.classList.toggle("dirty", perChatRulesEl.value.trim().length > 0);
+  }
+  perChatRulesEl.addEventListener("input", () => {
+    localStorage.setItem(LS_PERCHAT, perChatRulesEl.value);
+    reflectPerChatState();
+  });
+  reflectPerChatState();
+
+  // Toggle the inline per-chat editor without cluttering the chat view.
+  perChatToggle.addEventListener("click", () => {
+    const open = rulesPanel.classList.toggle("show");
+    perChatToggle.setAttribute("aria-expanded", open ? "true" : "false");
+    if (open) perChatRulesEl.focus();
+  });
+
+  // Single composable assembly point for the effective system message.
+  // Order: global rules, [future: skills], per-chat rules. Empty layers are skipped;
+  // if nothing remains, returns "" so no system message is sent.
+  function composeSystemMessage() {
+    const layers = [];
+    const global = globalRulesEl.value.trim();
+    if (global) layers.push(global);
+    // --- future skills layer injects here ---
+    const perChat = perChatRulesEl.value.trim();
+    if (perChat) layers.push(perChat);
+    return layers.join("\n\n");
+  }
+
+  // ===================== models =====================
+  function formatContext(n) {
+    if (!n) return "context n/a";
+    if (n >= 1000) return Math.round(n / 1000) + "K ctx";
+    return n + " ctx";
+  }
+
+  async function loadModels() {
+    modelStatusEl.textContent = "Fetching live model list…";
+    try {
+      const res = await fetch(API + "/models");
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      models = (data.data || []).slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
+      modelStatusEl.textContent = models.length + " models available";
+      if (!selectedModel && models.length) {
+        // sensible default if present, else first
+        const pref = models.find((m) => /gpt-4o-mini|claude.*haiku|llama-3\.1-8b/i.test(m.id));
+        setSelectedModel((pref || models[0]).id);
+      }
+      renderModelList("");
+      updateSelectedModelLabel();
+      populateCodeSelects();
+    } catch (e) {
+      modelStatusEl.textContent = "";
+      modelListEl.innerHTML = '<div class="model-item"><div class="meta">Could not load models.</div></div>';
+      showError("Couldn't load the model list. Is the backend running (npm start) and online?");
+    }
+  }
+
+  function renderModelList(filter) {
+    const f = filter.trim().toLowerCase();
+    const matches = models.filter((m) =>
+      !f || (m.id + " " + (m.name || "")).toLowerCase().includes(f)
+    ).slice(0, 200);
+
+    if (!matches.length) {
+      modelListEl.innerHTML = '<div class="model-item"><div class="meta">No models match your search.</div></div>';
+      return;
+    }
+    modelListEl.innerHTML = matches.map((m) => {
+      const active = m.id === selectedModel ? " active" : "";
+      const ctx = formatContext(m.context_length);
+      return '<div class="model-item' + active + '" data-id="' + escapeHtml(m.id) + '">' +
+             '<div class="name">' + escapeHtml(m.name || m.id) + '</div>' +
+             '<div class="meta">' + escapeHtml(m.id) + ' · ' + ctx + '</div></div>';
+    }).join("");
+  }
+
+  modelListEl.addEventListener("click", (e) => {
+    const item = e.target.closest(".model-item");
+    if (!item || !item.dataset.id) return;
+    setSelectedModel(item.dataset.id);
+    renderModelList(modelSearchEl.value);
+    updateSelectedModelLabel();
+  });
+
+  modelSearchEl.addEventListener("input", () => renderModelList(modelSearchEl.value));
+
+  function setSelectedModel(id) {
+    selectedModel = id;
+    localStorage.setItem(LS_MODEL, id);
+  }
+
+  function updateSelectedModelLabel() {
+    const m = models.find((x) => x.id === selectedModel);
+    if (m) {
+      selectedModelEl.innerHTML = "<b>" + escapeHtml(m.name || m.id) + "</b> · " + formatContext(m.context_length);
+    } else if (selectedModel) {
+      selectedModelEl.innerHTML = "<b>" + escapeHtml(selectedModel) + "</b>";
+    } else {
+      selectedModelEl.textContent = "No model selected";
+    }
+  }
+
+  // ===================== chat rendering =====================
+  function addMessageEl(role, content) {
+    if (emptyState) emptyState.style.display = "none";
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + role;
+
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = role === "user" ? "U" : "✦";
+
+    const col = document.createElement("div");
+    col.style.minWidth = "0";
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    if (role === "user") bubble.textContent = content;
+    else bubble.innerHTML = content ? renderMarkdown(content) : '<span class="cursor"></span>';
+
+    col.appendChild(bubble);
+
+    if (role === "assistant") {
+      const tools = document.createElement("div");
+      tools.className = "msg-tools";
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "copy-btn";
+      copyBtn.type = "button";
+      copyBtn.textContent = "copy";
+      copyBtn.addEventListener("click", () => {
+        const raw = bubble.dataset.raw || bubble.textContent;
+        navigator.clipboard.writeText(raw).then(() => {
+          copyBtn.textContent = "copied ✓";
+          setTimeout(() => (copyBtn.textContent = "copy"), 1500);
+        }).catch(() => showError("Couldn't copy to clipboard."));
+      });
+      tools.appendChild(copyBtn);
+      col.appendChild(tools);
+    }
+
+    wrap.appendChild(avatar);
+    wrap.appendChild(col);
+    messagesEl.appendChild(wrap);
+    scrollToBottom();
+    return bubble;
+  }
+
+  // ===================== sending / streaming =====================
+  async function sendMessage() {
+    if (streaming) return;
+    const text = inputEl.value.trim();
+    if (!text) return;
+
+    if (!selectedModel) { showError("Please pick a model first."); modelSearchEl.focus(); return; }
+
+    clearError();
+    inputEl.value = "";
+    autoGrow();
+
+    // render user message + push to history
+    addMessageEl("user", text);
+    history.push({ role: "user", content: text });
+
+    // build messages payload — effective system message goes first
+    const payloadMessages = [];
+    const sys = composeSystemMessage();
+    if (sys) payloadMessages.push({ role: "system", content: sys });
+    payloadMessages.push(...history);
+
+    // assistant bubble (live)
+    const aiBubble = addMessageEl("assistant", "");
+    let acc = "";
+
+    setStreaming(true);
+    abortController = new AbortController();
+
+    try {
+      const res = await fetch(API + "/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: selectedModel, messages: payloadMessages }),
+        signal: abortController.signal
+      });
+
+      if (!res.ok) {
+        let detail = "";
+        try { const j = await res.json(); detail = j.error && j.error.message ? j.error.message : ""; } catch (_) {}
+        throw new HttpError(res.status, detail);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE: split on double-newline event boundaries
+        const lines = buffer.split("\n");
+        buffer = lines.pop();   // keep incomplete tail
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data:")) continue;
+          const data = trimmed.slice(5).trim();
+          if (data === "[DONE]") { buffer = ""; break; }
+          try {
+            const json = JSON.parse(data);
+            const delta = json.choices && json.choices[0] && json.choices[0].delta;
+            const token = delta && delta.content;
+            if (token) {
+              acc += token;
+              aiBubble.dataset.raw = acc;
+              aiBubble.innerHTML = renderMarkdown(acc) + '<span class="cursor"></span>';
+              scrollToBottom();
+            }
+          } catch (_) { /* partial / keepalive line, ignore */ }
+        }
+      }
+
+      // finalize
+      aiBubble.dataset.raw = acc;
+      aiBubble.innerHTML = acc ? renderMarkdown(acc) : "<em>(empty response)</em>";
+      history.push({ role: "assistant", content: acc });
+      scrollToBottom();
+    } catch (err) {
+      handleSendError(err, aiBubble, acc);
+    } finally {
+      setStreaming(false);
+      abortController = null;
+    }
+  }
+
+  function HttpError(status, detail) { this.status = status; this.detail = detail; this.name = "HttpError"; }
+  HttpError.prototype = Object.create(Error.prototype);
+
+  function handleSendError(err, aiBubble, acc) {
+    let msg;
+    if (err && err.name === "AbortError") {
+      msg = "Generation stopped.";
+      if (acc) { aiBubble.dataset.raw = acc; aiBubble.innerHTML = renderMarkdown(acc); history.push({ role: "assistant", content: acc }); }
+      else aiBubble.closest(".msg").remove();
+      clearError();
+      return;
+    } else if (err instanceof HttpError) {
+      if (err.status === 401) msg = "Rejected (401): " + (err.detail || "the server's OpenRouter key is missing or invalid. Check server/.env.");
+      else if (err.status === 402) msg = "Payment required (402): your OpenRouter account may be out of credits.";
+      else if (err.status === 429) msg = "Rate limited (429): too many requests or this model is busy. Wait a moment and try again.";
+      else if (err.status === 400) msg = "Bad request (400): this model may not accept the conversation as sent." + (err.detail ? " — " + err.detail : "");
+      else if (err.status === 502) msg = "The backend couldn't reach OpenRouter (502). Check the server's connection.";
+      else if (err.status >= 500) msg = "Server error (" + err.status + "). Try again shortly.";
+      else msg = "Request failed (" + err.status + ")." + (err.detail ? " — " + err.detail : "");
+    } else if (err && /Failed to fetch|NetworkError/i.test(err.message || "")) {
+      msg = "Network error: couldn't reach the local backend. Is it running (npm start)?";
+    } else {
+      msg = "Something went wrong: " + (err && err.message ? err.message : "unknown error") + ".";
+    }
+    showError(msg);
+    // remove the empty/partial assistant bubble if nothing useful streamed
+    if (!acc) { const m = aiBubble.closest(".msg"); if (m) m.remove(); }
+    else { aiBubble.dataset.raw = acc; aiBubble.innerHTML = renderMarkdown(acc); history.push({ role: "assistant", content: acc }); }
+  }
+
+  function setStreaming(on) {
+    streaming = on;
+    if (on) {
+      sendBtn.innerHTML = '<span class="spinner"></span> Stop';
+      sendBtn.dataset.mode = "stop";
+    } else {
+      sendBtn.textContent = "Send";
+      sendBtn.dataset.mode = "send";
+    }
+  }
+
+  sendBtn.addEventListener("click", () => {
+    if (sendBtn.dataset.mode === "stop") { if (abortController) abortController.abort(); }
+    else sendMessage();
+  });
+
+  // ===================== composer =====================
+  function autoGrow() {
+    inputEl.style.height = "auto";
+    inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
+  }
+  inputEl.addEventListener("input", autoGrow);
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  // ===================== clear chat =====================
+  clearChatBtn.addEventListener("click", () => {
+    if ((history.length || perChatRulesEl.value.trim()) &&
+        !confirm("Clear this conversation and its per-chat rules? (Global rules are kept.)")) return;
+    history = [];
+    messagesEl.innerHTML = "";
+    messagesEl.appendChild(emptyState);
+    emptyState.style.display = "";
+    // per-chat rules belong to this conversation — reset them with it
+    perChatRulesEl.value = "";
+    localStorage.removeItem(LS_PERCHAT);
+    reflectPerChatState();
+    clearError();
+  });
+
+  // ===================== CODE PANEL — model selects + mode toggle =====================
+
+  function populateCodeSelects() {
+    const savedPlan = localStorage.getItem(LS_PLAN_MODEL) || "";
+    const savedAct  = localStorage.getItem(LS_ACT_MODEL)  || "";
+    [planModelSelect, actModelSelect].forEach((sel, i) => {
+      const saved = i === 0 ? savedPlan : savedAct;
+      sel.innerHTML = "";
+      for (const m of models) {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = (m.name || m.id).slice(0, 50);
+        if (m.id === saved) opt.selected = true;
+        sel.appendChild(opt);
+      }
+      // If saved model not in list, fall back to first
+      if (!saved && models.length) sel.value = models[0].id;
+    });
+  }
+
+  planModelSelect.addEventListener("change", () => localStorage.setItem(LS_PLAN_MODEL, planModelSelect.value));
+  actModelSelect.addEventListener("change",  () => localStorage.setItem(LS_ACT_MODEL,  actModelSelect.value));
+
+  function setCodeMode(mode) {
+    codeMode = mode;
+    modePlanBtn.classList.toggle("active", mode === "plan");
+    modeActBtn.classList.toggle("active",  mode === "act");
+    modePlanBtn.setAttribute("aria-pressed", mode === "plan" ? "true" : "false");
+    modeActBtn.setAttribute("aria-pressed",  mode === "act"  ? "true" : "false");
+  }
+  modePlanBtn.addEventListener("click", () => setCodeMode("plan"));
+  modeActBtn.addEventListener("click",  () => setCodeMode("act"));
+
+  // ===================== CODE PANEL =====================
+
+  function showCodeError(msg) {
+    codeBannerEl.textContent = msg;
+    codeBannerEl.classList.add("show");
+    clearTimeout(showCodeError._t);
+    showCodeError._t = setTimeout(() => codeBannerEl.classList.remove("show"), 10000);
+  }
+  function clearCodeError() { codeBannerEl.classList.remove("show"); }
+
+  function codeScrollToBottom() { codeMessagesEl.scrollTop = codeMessagesEl.scrollHeight; }
+
+  // Add a user or assistant message bubble to the CODE thread.
+  function addCodeMessage(role, text) {
+    codeEmptyEl.style.display = "none";
+    const wrap = document.createElement("div");
+    wrap.className = "msg " + role;
+
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = role === "user" ? "U" : "✦";
+
+    const col = document.createElement("div");
+    col.style.minWidth = "0";
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    if (role === "user") {
+      bubble.textContent = text;
+    } else {
+      bubble.innerHTML = text ? renderMarkdown(text) : '<span class="cursor"></span>';
+    }
+    col.appendChild(bubble);
+
+    if (role === "assistant") {
+      const tools = document.createElement("div");
+      tools.className = "msg-tools";
+      const copyBtn = document.createElement("button");
+      copyBtn.className = "copy-btn";
+      copyBtn.type = "button";
+      copyBtn.textContent = "copy";
+      copyBtn.addEventListener("click", () => {
+        const raw = bubble.dataset.raw || bubble.textContent;
+        navigator.clipboard.writeText(raw).then(() => {
+          copyBtn.textContent = "copied ✓";
+          setTimeout(() => (copyBtn.textContent = "copy"), 1500);
+        }).catch(() => showCodeError("Couldn't copy to clipboard."));
+      });
+      tools.appendChild(copyBtn);
+      col.appendChild(tools);
+    }
+
+    wrap.appendChild(avatar);
+    wrap.appendChild(col);
+    codeMessagesEl.appendChild(wrap);
+    codeScrollToBottom();
+    return bubble;
+  }
+
+  // Add a subtle iteration separator line.
+  function addIterSep(n) {
+    if (n === 1) return; // no separator before the first iteration
+    const sep = document.createElement("div");
+    sep.className = "iter-sep";
+    sep.textContent = "· iteration " + n + " ·";
+    codeMessagesEl.appendChild(sep);
+    codeScrollToBottom();
+  }
+
+  // Add a tool activity card. Returns the card element so we can update it.
+  function addToolCard(id, name, input) {
+    // Summarise the key input arg for the header line
+    const inputSummary = input
+      ? Object.values(input).filter(Boolean).join("  ").slice(0, 80)
+      : "";
+
+    const card = document.createElement("div");
+    card.className = "tool-card";
+    card.innerHTML =
+      '<div class="tool-card-head">' +
+        '<span class="tool-icon">⚙</span>' +
+        '<span class="tool-name">' + escapeHtml(name) + '</span>' +
+        '<span class="tool-args">' + escapeHtml(inputSummary) + '</span>' +
+        '<span class="tool-status running">running…</span>' +
+        '<span class="tool-chevron">▸</span>' +
+      '</div>' +
+      '<div class="tool-card-body"><pre></pre></div>';
+
+    card.querySelector(".tool-card-head").addEventListener("click", () => {
+      card.classList.toggle("open");
+    });
+
+    codeMessagesEl.appendChild(card);
+    codeScrollToBottom();
+
+    toolCards.set(id, {
+      card,
+      statusEl: card.querySelector(".tool-status"),
+      bodyPre: card.querySelector(".tool-card-body pre")
+    });
+    return card;
+  }
+
+  // Update a tool card with the result (called when tool_result arrives).
+  function updateToolCard(id, content, isError) {
+    const entry = toolCards.get(id);
+    if (!entry) return;
+    entry.statusEl.className = "tool-status " + (isError ? "error" : "done");
+    entry.statusEl.textContent = isError ? "error" : "done";
+    entry.bodyPre.textContent = content || "(empty)";
+    // Auto-expand short results so the user can see them without clicking
+    if (content && content.length < 600) entry.card.classList.add("open");
+    codeScrollToBottom();
+  }
+
+  function setCodeStreaming(on) {
+    codeStreaming = on;
+    codeStopBtn.style.display = on ? "" : "none";
+    codeSendBtn.disabled = on;
+    if (!on) {
+      codeSendBtn.textContent = "Send";
+      codeCurrentBubble = null;
+      codeCurrentRaw = "";
+    }
+  }
+
+  // Main agent send — reads typed SSE events from /api/agent.
+  async function sendAgentMessage() {
+    if (codeStreaming) return;
+    const text = codeInputEl.value.trim();
+    if (!text) return;
+    // Use the model selected for the current mode; fall back to CHAT model
+    const codeModel = codeMode === "act"
+      ? (actModelSelect.value  || selectedModel)
+      : (planModelSelect.value || selectedModel);
+    if (!codeModel) { showCodeError("Please pick a model first."); return; }
+
+    clearCodeError();
+    toolCards.clear();
+    codeInputEl.value = "";
+    codeInputEl.style.height = "auto";
+
+    addCodeMessage("user", text);
+    codeHistory.push({ role: "user", content: text });
+
+    setCodeStreaming(true);
+    codeAbortController = new AbortController();
+
+    const systemMessage = globalRulesEl.value.trim();
+
+    let res;
+    try {
+      res = await fetch(API + "/agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: codeModel,
+          messages: codeHistory,
+          systemMessage,
+          mode: codeMode
+        }),
+        signal: codeAbortController.signal
+      });
+    } catch (err) {
+      if (err.name === "AbortError") { setCodeStreaming(false); return; }
+      showCodeError("Network error: couldn't reach the local backend. Is it running?");
+      setCodeStreaming(false);
+      return;
+    }
+
+    if (!res.ok) {
+      let detail = "";
+      try { const j = await res.json(); detail = j.error?.message || ""; } catch (_) {}
+      showCodeError("Agent request failed (" + res.status + ")" + (detail ? ": " + detail : "."));
+      setCodeStreaming(false);
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let assistantAccText = "";  // accumulate full assistant text for codeHistory
+
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data:")) continue;
+          const raw = trimmed.slice(5).trim();
+          let evt;
+          try { evt = JSON.parse(raw); } catch (_) { continue; }
+
+          switch (evt.type) {
+
+            case "mode":
+              // Backend echoes the resolved mode; use it to label the header pill
+              // (no DOM change needed in Phase 3 — the UI already shows it)
+              break;
+
+            case "iteration":
+              // New iteration → new assistant bubble
+              if (codeCurrentBubble && codeCurrentRaw) {
+                codeCurrentBubble.dataset.raw = codeCurrentRaw;
+                codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw);
+              }
+              addIterSep(evt.n);
+              codeCurrentBubble = addCodeMessage("assistant", "");
+              codeCurrentRaw = "";
+              break;
+
+            case "text":
+              // Append token to the current streaming bubble
+              if (!codeCurrentBubble) {
+                codeCurrentBubble = addCodeMessage("assistant", "");
+                codeCurrentRaw = "";
+              }
+              codeCurrentRaw += evt.content;
+              assistantAccText += evt.content;
+              codeCurrentBubble.dataset.raw = codeCurrentRaw;
+              codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw) + '<span class="cursor"></span>';
+              codeScrollToBottom();
+              break;
+
+            case "tool_start":
+              // Finalize current bubble (remove cursor), then add tool card
+              if (codeCurrentBubble) {
+                codeCurrentBubble.innerHTML = codeCurrentRaw
+                  ? renderMarkdown(codeCurrentRaw)
+                  : "<em>(no preamble)</em>";
+              }
+              addToolCard(evt.id, evt.name, evt.input);
+              break;
+
+            case "tool_result":
+              updateToolCard(evt.id, evt.content, false);
+              break;
+
+            case "done":
+              // Finalize the last bubble
+              if (codeCurrentBubble) {
+                if (codeCurrentRaw) {
+                  codeCurrentBubble.dataset.raw = codeCurrentRaw;
+                  codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw);
+                } else {
+                  codeCurrentBubble.innerHTML = "<em>(no response)</em>";
+                }
+              }
+              if (assistantAccText) {
+                codeHistory.push({ role: "assistant", content: assistantAccText });
+              }
+              break;
+
+            case "aborted":
+              if (codeCurrentRaw) {
+                codeCurrentBubble.dataset.raw = codeCurrentRaw;
+                codeCurrentBubble.innerHTML = renderMarkdown(codeCurrentRaw);
+                codeHistory.push({ role: "assistant", content: codeCurrentRaw });
+              } else if (codeCurrentBubble) {
+                codeCurrentBubble.closest(".msg")?.remove();
+              }
+              break;
+
+            case "error":
+              showCodeError(evt.message || "Agent error.");
+              if (codeCurrentBubble && !codeCurrentRaw) {
+                codeCurrentBubble.closest(".msg")?.remove();
+              }
+              break;
+          }
+        }
+      }
+    } catch (err) {
+      if (err.name !== "AbortError") {
+        showCodeError("Stream error: " + err.message);
+      }
+    } finally {
+      setCodeStreaming(false);
+    }
+  }
+
+  // Code panel event wiring
+  codeSendBtn.addEventListener("click", sendAgentMessage);
+  codeStopBtn.addEventListener("click", () => { if (codeAbortController) codeAbortController.abort(); });
+
+  codeInputEl.addEventListener("input", () => {
+    codeInputEl.style.height = "auto";
+    codeInputEl.style.height = Math.min(codeInputEl.scrollHeight, 200) + "px";
+  });
+  codeInputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAgentMessage(); }
+  });
+
+  codeClearBtn.addEventListener("click", () => {
+    if ((codeHistory.length) && !confirm("Clear this agent conversation?")) return;
+    codeHistory = [];
+    toolCards.clear();
+    codeMessagesEl.innerHTML = "";
+    codeMessagesEl.appendChild(codeEmptyEl);
+    codeEmptyEl.style.display = "";
+    clearCodeError();
+  });
+
+  // ===================== mobile =====================
+  mobileToggle.addEventListener("click", () => sidebar.classList.toggle("collapsed"));
+
+  // ===================== init =====================
+  checkBackend();
+  loadModels();
+  updateSelectedModelLabel();
+  autoGrow();
+})();
+</script>
+</body>
+</html>
