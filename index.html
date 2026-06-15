@@ -364,6 +364,90 @@
     max-height: 300px; overflow-y: auto;
   }
 
+  /* ---------- Phase 5-8 controls ---------- */
+  /* permission popover */
+  .perm-pop {
+    position: absolute; z-index: 60; top: 100%; right: 0; margin-top: 6px;
+    width: 280px; padding: 14px; border-radius: 14px;
+    display: none; flex-direction: column; gap: 10px;
+  }
+  .perm-pop.show { display: flex; }
+  .perm-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 13px; }
+  .perm-row label { color: var(--ink); cursor: pointer; }
+  .perm-row .hint { font-size: 11px; color: var(--ink-dim); }
+  .switch { position: relative; width: 38px; height: 21px; flex: 0 0 auto; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider {
+    position: absolute; inset: 0; cursor: pointer; border-radius: 21px;
+    background: rgba(120,150,190,0.3); transition: background 0.2s; border: 1px solid var(--glass-border);
+  }
+  .switch .slider::before {
+    content: ""; position: absolute; height: 15px; width: 15px; left: 3px; top: 2px;
+    border-radius: 50%; background: var(--ink); transition: transform 0.2s;
+  }
+  .switch input:checked + .slider { background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep)); }
+  .switch input:checked + .slider::before { transform: translateX(16px); background: #20160a; }
+  .switch input:focus-visible + .slider { box-shadow: 0 0 0 3px rgba(244,213,141,0.35); }
+  .switch.danger input:checked + .slider { background: linear-gradient(180deg,#ff8a8a,#c94a4a); }
+  .perm-divider { height: 1px; background: rgba(180,220,255,0.12); margin: 2px 0; }
+  .iter-input { width: 56px; background: rgba(8,24,48,0.45); border: 1px solid var(--glass-border);
+    border-radius: 8px; padding: 4px 6px; color: var(--ink); font-size: 12px; text-align: center; }
+  .bypass-warn { font-size: 11px; color: var(--danger); display: none; }
+  .bypass-warn.show { display: block; }
+
+  /* context + cost status strip */
+  .code-status {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 6px 20px; font-size: 11px; color: var(--ink-dim);
+    border-bottom: 1px solid rgba(180,220,255,0.10);
+  }
+  .ctx-bar { flex: 1; min-width: 120px; height: 6px; border-radius: 4px; overflow: hidden;
+    background: rgba(8,24,48,0.5); border: 1px solid var(--glass-border); max-width: 220px; }
+  .ctx-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#6ec8ff,#f4d58d); transition: width 0.3s; }
+  .ctx-fill.warn { background: linear-gradient(90deg,#f4d58d,#ff8a8a); }
+  .cost-val { color: var(--gold); font-weight: 600; }
+
+  /* pinned files + @-mention */
+  .pins { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 8px; }
+  .pins:empty { display: none; }
+  .pin-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px;
+    font-family: ui-monospace,monospace; padding: 3px 8px; border-radius: 999px;
+    background: rgba(244,213,141,0.12); border: 1px solid rgba(244,213,141,0.3); color: var(--gold); }
+  .pin-chip button { background: none; border: none; color: var(--gold); cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
+  .mention-pop {
+    position: absolute; z-index: 70; bottom: 100%; left: 20px; margin-bottom: 6px;
+    width: min(420px, 80%); max-height: 240px; overflow-y: auto; border-radius: 12px; display: none;
+  }
+  .mention-pop.show { display: block; }
+  .mention-item { padding: 8px 12px; font-size: 12px; font-family: ui-monospace,monospace;
+    cursor: pointer; border-bottom: 1px solid rgba(180,220,255,0.08); }
+  .mention-item:hover, .mention-item.sel { background: rgba(244,213,141,0.16); }
+
+  /* drawer (tasks / checkpoints / skills) */
+  .drawer-overlay { position: fixed; inset: 0; z-index: 150; background: rgba(6,18,42,0.6);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); display: none; }
+  .drawer-overlay.show { display: block; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(420px, 92vw); z-index: 151;
+    display: flex; flex-direction: column; border-radius: 0; transform: translateX(100%);
+    transition: transform 0.25s ease; }
+  .drawer.show { transform: translateX(0); }
+  .drawer-head { display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 20px; border-bottom: 1px solid var(--glass-border); }
+  .drawer-head .title { font-family: "Fraunces",serif; font-size: 18px; color: var(--gold); }
+  .drawer-body { flex: 1; overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; }
+  .list-card { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--glass-border);
+    background: rgba(80,140,210,0.08); display: flex; flex-direction: column; gap: 4px; }
+  .list-card .lc-title { font-size: 13px; font-weight: 600; color: var(--ink); }
+  .list-card .lc-meta { font-size: 11px; color: var(--ink-dim); }
+  .list-card .lc-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .skill-edit { display: flex; flex-direction: column; gap: 8px; }
+  .skill-edit input, .skill-edit textarea {
+    background: rgba(8,24,48,0.45); border: 1px solid var(--glass-border); border-radius: 9px;
+    padding: 8px 10px; color: var(--ink); font-family: inherit; font-size: 13px; }
+  .skill-edit textarea { min-height: 80px; resize: vertical; }
+
+  @media (prefers-reduced-motion: reduce) { .drawer { transition: none; } }
+
   /* ---------- Code settings bar (mode + model selectors) ---------- */
   .code-settings {
     display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
@@ -580,6 +664,11 @@
         <textarea class="control" id="globalRules" placeholder="Standing instructions applied to every chat…">You are a helpful, thoughtful assistant.</textarea>
         <span class="status-line">Applied to every conversation.</span>
       </div>
+
+      <div class="field">
+        <button class="btn" id="skillsBtn" type="button" style="width:100%">✦ Skills <span id="skillsCount" class="status-line"></span></button>
+        <span class="status-line">Reusable instruction modules, toggled on per session.</span>
+      </div>
     </aside>
 
     <!-- ================= WORKSPACE (CHAT / CODE) ================= -->
@@ -626,6 +715,27 @@
         <div class="chat-head">
           <span class="title">code agent</span>
           <div class="row">
+            <button class="btn ghost" id="codeTasksBtn" type="button" title="Task history">☰ tasks</button>
+            <button class="btn ghost" id="codeCkptBtn" type="button" title="Checkpoints">⟲ checkpoints</button>
+            <button class="btn ghost" id="codeNewBtn" type="button" title="New task">+ new</button>
+            <div style="position:relative">
+              <button class="btn ghost" id="permBtn" type="button" title="Permissions" aria-expanded="false">🛡 perms</button>
+              <div class="perm-pop glass" id="permPop">
+                <div class="perm-row"><label for="permReads">Auto-approve reads</label>
+                  <span class="switch"><input type="checkbox" id="permReads" checked><span class="slider"></span></span></div>
+                <div class="perm-row"><label for="permWrites">Auto-approve writes</label>
+                  <span class="switch"><input type="checkbox" id="permWrites"><span class="slider"></span></span></div>
+                <div class="perm-row"><label for="permCommands">Auto-approve commands</label>
+                  <span class="switch"><input type="checkbox" id="permCommands"><span class="slider"></span></span></div>
+                <div class="perm-divider"></div>
+                <div class="perm-row"><label for="permBypass">⚠ Bypass (YOLO)</label>
+                  <span class="switch danger"><input type="checkbox" id="permBypass"><span class="slider"></span></span></div>
+                <div class="bypass-warn" id="bypassWarn">Approves everything automatically. Still workspace-scoped, but nothing will ask first.</div>
+                <div class="perm-divider"></div>
+                <div class="perm-row"><label for="permMaxIter">Max iterations</label>
+                  <input class="iter-input" type="number" id="permMaxIter" min="1" max="50" value="20"></div>
+              </div>
+            </div>
             <button class="btn ghost" id="codeStopBtn" type="button" style="display:none">■ stop</button>
             <button class="btn ghost" id="codeClearBtn" type="button">clear</button>
           </div>
@@ -644,16 +754,25 @@
             <select class="code-select" id="actModelSelect" title="Model used in Act mode"></select>
           </div>
         </div>
+        <div class="code-status">
+          <span title="Estimated context usage">ctx</span>
+          <span class="ctx-bar"><span class="ctx-fill" id="ctxFill"></span></span>
+          <span id="ctxLabel">0%</span>
+          <span id="tokLabel">· 0 tok</span>
+          <span id="costLabel">· <span class="cost-val">$0.0000</span></span>
+        </div>
         <div class="banner" id="codeBanner"></div>
         <div class="messages" id="codeMessages">
           <div class="empty" id="codeEmpty">
             <h2>Code Agent ✦</h2>
-            <p>Switch between <b>Plan</b> (read-only investigation → written plan) and <b>Act</b> (executes: edits files &amp; runs commands, with approval). Each mode uses its own model.</p>
-            <span class="pill">plan · act · approval-gated</span>
+            <p><b>Plan</b> investigates (read-only) → a written plan. <b>Act</b> executes: edits files &amp; runs commands with approval. Type <b>@</b> to attach a file. Use 🛡 for auto-approve / bypass / iteration cap.</p>
+            <span class="pill">plan · act · pin · checkpoints · cost</span>
           </div>
         </div>
-        <div class="composer">
-          <textarea class="control" id="codeInput" placeholder="Describe what you want to explore or understand…  (Enter to send · Shift+Enter for newline)" rows="1"></textarea>
+        <div class="pins" id="codePins"></div>
+        <div class="composer" style="position:relative">
+          <div class="mention-pop glass" id="mentionPop"></div>
+          <textarea class="control" id="codeInput" placeholder="Describe a task…  @ to attach a file · Enter to send · Shift+Enter newline" rows="1"></textarea>
           <button class="btn gold send-btn" id="codeSendBtn" type="button">Send</button>
         </div>
       </section>
@@ -678,6 +797,19 @@
     </div>
   </div>
 
+  <!-- ===== Drawer (tasks / checkpoints / skills) ===== -->
+  <div class="drawer-overlay" id="drawerOverlay"></div>
+  <aside class="drawer glass" id="drawer">
+    <div class="drawer-head">
+      <span class="title" id="drawerTitle">Tasks</span>
+      <div class="row">
+        <button class="btn ghost" id="drawerActionBtn" type="button" style="display:none">+ new</button>
+        <button class="btn ghost" id="drawerCloseBtn" type="button">✕</button>
+      </div>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
+  </aside>
+
 <script>
 (function () {
   "use strict";
@@ -688,6 +820,8 @@
   const LS_SYSTEM     = "chatty.system";       // legacy key (migrated below)
   const LS_PLAN_MODEL = "chatty.planModel";
   const LS_ACT_MODEL  = "chatty.actModel";
+  const LS_PERMS      = "chatty.perms";
+  const LS_SKILLS     = "chatty.skills";
   const API = "/api";
 
   // ---- state ----
@@ -705,6 +839,12 @@
   let codeCurrentRaw = "";
   const toolCards = new Map();
   let codeMode = "plan";   // "plan" | "act"
+  let codePins = [];                 // [{path, content}] attached files
+  let currentTaskId = "task_" + Date.now();
+  let runningCost = 0;               // $ accumulated this task
+  let runningTokens = 0;             // tokens this task
+  let skills = [];                   // [{id,name,content,enabled}]
+  let mentionState = { open: false, start: -1, items: [], sel: 0 };
 
   // ---- elements ----
   const $ = (id) => document.getElementById(id);
@@ -751,6 +891,20 @@
   const confirmApprove = $("confirmApprove");
   const confirmDeny = $("confirmDeny");
   let pendingConfirmId = null;
+
+  // Phase 5-8 elements
+  const permBtn = $("permBtn"), permPop = $("permPop");
+  const permReads = $("permReads"), permWrites = $("permWrites"),
+        permCommands = $("permCommands"), permBypass = $("permBypass"),
+        permMaxIter = $("permMaxIter"), bypassWarn = $("bypassWarn");
+  const ctxFill = $("ctxFill"), ctxLabel = $("ctxLabel"),
+        tokLabel = $("tokLabel"), costLabel = $("costLabel");
+  const codePinsEl = $("codePins"), mentionPop = $("mentionPop");
+  const codeTasksBtn = $("codeTasksBtn"), codeCkptBtn = $("codeCkptBtn"), codeNewBtn = $("codeNewBtn");
+  const skillsBtn = $("skillsBtn"), skillsCount = $("skillsCount");
+  const drawerOverlay = $("drawerOverlay"), drawer = $("drawer"),
+        drawerTitle = $("drawerTitle"), drawerBody = $("drawerBody"),
+        drawerCloseBtn = $("drawerCloseBtn"), drawerActionBtn = $("drawerActionBtn");
 
   // ===================== utilities =====================
   function showError(msg) {
@@ -883,7 +1037,8 @@
     const layers = [];
     const global = globalRulesEl.value.trim();
     if (global) layers.push(global);
-    // --- future skills layer injects here ---
+    const skills = composeSkills();          // Phase 8 — enabled skill modules
+    if (skills) layers.push(skills);
     const perChat = perChatRulesEl.value.trim();
     if (perChat) layers.push(perChat);
     return layers.join("\n\n");
@@ -1223,6 +1378,296 @@
     if (e.key === "Escape" && !confirmOverlay.hidden) resolveConfirm(false);
   });
 
+  // ===================== PERMISSIONS (Phase 5) =====================
+  function loadPerms() {
+    let p = {};
+    try { p = JSON.parse(localStorage.getItem(LS_PERMS) || "{}"); } catch (_) {}
+    permReads.checked    = p.autoReads !== false;
+    permWrites.checked   = Boolean(p.autoWrites);
+    permCommands.checked = Boolean(p.autoCommands);
+    permBypass.checked   = Boolean(p.bypass);
+    permMaxIter.value    = p.maxIterations || 20;
+    reflectBypass();
+  }
+  function savePerms() {
+    localStorage.setItem(LS_PERMS, JSON.stringify(getPerms()));
+    reflectBypass();
+  }
+  function getPerms() {
+    return {
+      autoReads: permReads.checked,
+      autoWrites: permWrites.checked,
+      autoCommands: permCommands.checked,
+      bypass: permBypass.checked,
+      maxIterations: Math.min(Math.max(1, Number(permMaxIter.value) || 20), 50)
+    };
+  }
+  function reflectBypass() { bypassWarn.classList.toggle("show", permBypass.checked); }
+
+  permBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const open = permPop.classList.toggle("show");
+    permBtn.setAttribute("aria-expanded", open ? "true" : "false");
+  });
+  document.addEventListener("click", (e) => {
+    if (!permPop.contains(e.target) && e.target !== permBtn) permPop.classList.remove("show");
+  });
+  [permReads, permWrites, permCommands, permBypass, permMaxIter].forEach(el =>
+    el.addEventListener("change", savePerms));
+
+  // ===================== CONTEXT + COST (Phase 6/7) =====================
+  function estTokens(str) { return Math.ceil((str || "").length / 4); }
+  function currentContextLen() {
+    const m = models.find(x => x.id === (codeMode === "act" ? actModelSelect.value : planModelSelect.value));
+    return (m && m.context_length) || 8192;
+  }
+  function updateContextMeter() {
+    let chars = 0;
+    for (const msg of codeHistory) chars += (typeof msg.content === "string" ? msg.content.length : 0);
+    chars += composeCodeSystem().length;
+    chars += codePins.reduce((a, p) => a + (p.content || "").length, 0);
+    const tokens = Math.ceil(chars / 4);
+    const ctxLen = currentContextLen();
+    const pct = Math.min(100, Math.round((tokens / ctxLen) * 100));
+    ctxFill.style.width = pct + "%";
+    ctxFill.classList.toggle("warn", pct > 70);
+    ctxLabel.textContent = pct + "%";
+    tokLabel.textContent = "· ~" + tokens.toLocaleString() + " / " + ctxLen.toLocaleString() + " tok";
+  }
+  function updateCostMeter() {
+    costLabel.innerHTML = '· <span class="cost-val">$' + runningCost.toFixed(4) + '</span> · ' +
+      runningTokens.toLocaleString() + " tok used";
+  }
+
+  // ===================== @-CONTEXT + PINS (Phase 6) =====================
+  function renderPins() {
+    codePinsEl.innerHTML = "";
+    codePins.forEach((p, i) => {
+      const chip = document.createElement("span");
+      chip.className = "pin-chip";
+      chip.innerHTML = "📎 " + escapeHtml(p.path) + " <button title='unpin'>✕</button>";
+      chip.querySelector("button").addEventListener("click", () => {
+        codePins.splice(i, 1); renderPins(); updateContextMeter();
+      });
+      codePinsEl.appendChild(chip);
+    });
+  }
+  async function pinFile(relPath) {
+    if (codePins.some(p => p.path === relPath)) return;
+    try {
+      const r = await fetch(API + "/file?path=" + encodeURIComponent(relPath));
+      const j = await r.json();
+      if (j.content != null) { codePins.push({ path: relPath, content: j.content }); renderPins(); updateContextMeter(); }
+      else showCodeError(j.error || "Couldn't attach file.");
+    } catch (_) { showCodeError("Couldn't attach file."); }
+  }
+
+  async function refreshMentions(query) {
+    try {
+      const r = await fetch(API + "/files?q=" + encodeURIComponent(query));
+      const j = await r.json();
+      mentionState.items = j.files || [];
+      mentionState.sel = 0;
+      renderMentions();
+    } catch (_) { closeMentions(); }
+  }
+  function renderMentions() {
+    if (!mentionState.items.length) { closeMentions(); return; }
+    mentionPop.innerHTML = mentionState.items.map((f, i) =>
+      '<div class="mention-item' + (i === mentionState.sel ? " sel" : "") + '" data-i="' + i + '">' + escapeHtml(f) + '</div>'
+    ).join("");
+    mentionPop.classList.add("show");
+    mentionState.open = true;
+    mentionPop.querySelectorAll(".mention-item").forEach(el =>
+      el.addEventListener("mousedown", (e) => { e.preventDefault(); chooseMention(Number(el.dataset.i)); }));
+  }
+  function closeMentions() { mentionPop.classList.remove("show"); mentionState.open = false; }
+  function chooseMention(i) {
+    const file = mentionState.items[i];
+    if (file) {
+      pinFile(file);
+      // remove the @token being typed
+      const v = codeInputEl.value;
+      codeInputEl.value = v.slice(0, mentionState.start) + v.slice(codeInputEl.selectionStart);
+    }
+    closeMentions();
+    codeInputEl.focus();
+  }
+  // Detect "@" token under cursor
+  codeInputEl.addEventListener("input", () => {
+    const pos = codeInputEl.selectionStart;
+    const before = codeInputEl.value.slice(0, pos);
+    const m = before.match(/@([\w./-]*)$/);
+    if (m) { mentionState.start = pos - m[0].length; refreshMentions(m[1]); }
+    else closeMentions();
+  });
+
+  // ===================== SKILLS (Phase 8) =====================
+  function loadSkills() {
+    try { skills = JSON.parse(localStorage.getItem(LS_SKILLS) || "[]"); } catch (_) { skills = []; }
+    updateSkillsCount();
+  }
+  function saveSkills() { localStorage.setItem(LS_SKILLS, JSON.stringify(skills)); updateSkillsCount(); }
+  function updateSkillsCount() {
+    const on = skills.filter(s => s.enabled).length;
+    skillsCount.textContent = skills.length ? "(" + on + "/" + skills.length + ")" : "";
+  }
+  function composeSkills() {
+    const on = skills.filter(s => s.enabled && s.content.trim());
+    if (!on.length) return "";
+    return "Active skills:\n" + on.map(s => "## " + s.name + "\n" + s.content.trim()).join("\n\n");
+  }
+
+  // Effective system message for the CODE agent (global + skills + pinned files).
+  function composeCodeSystem() {
+    const layers = [];
+    const g = globalRulesEl.value.trim();
+    if (g) layers.push(g);
+    const sk = composeSkills();
+    if (sk) layers.push(sk);
+    if (codePins.length) {
+      layers.push("Attached files (the user pinned these for context):\n" +
+        codePins.map(p => "=== " + p.path + " ===\n" + p.content).join("\n\n"));
+    }
+    return layers.join("\n\n");
+  }
+
+  // ===================== DRAWER (tasks / checkpoints / skills) =====================
+  function openDrawer(title, actionLabel, actionFn) {
+    drawerTitle.textContent = title;
+    if (actionLabel) { drawerActionBtn.style.display = ""; drawerActionBtn.textContent = actionLabel; drawerActionBtn.onclick = actionFn; }
+    else drawerActionBtn.style.display = "none";
+    drawerOverlay.classList.add("show");
+    drawer.classList.add("show");
+  }
+  function closeDrawer() { drawerOverlay.classList.remove("show"); drawer.classList.remove("show"); }
+  drawerCloseBtn.addEventListener("click", closeDrawer);
+  drawerOverlay.addEventListener("click", closeDrawer);
+
+  // ---- Tasks ----
+  async function saveCurrentTask() {
+    if (!codeHistory.length) return;
+    const firstUser = codeHistory.find(m => m.role === "user");
+    const title = firstUser ? firstUser.content.slice(0, 60) : "Untitled task";
+    try {
+      await fetch(API + "/tasks/" + currentTaskId, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, mode: codeMode, messages: codeHistory,
+          pins: codePins, cost: runningCost, tokens: runningTokens })
+      });
+    } catch (_) {}
+  }
+  async function openTasksDrawer() {
+    openDrawer("Task history", null);
+    drawerBody.innerHTML = '<div class="lc-meta">Loading…</div>';
+    try {
+      const r = await fetch(API + "/tasks");
+      const { tasks } = await r.json();
+      if (!tasks.length) { drawerBody.innerHTML = '<div class="lc-meta">No saved tasks yet. They save automatically as you work.</div>'; return; }
+      drawerBody.innerHTML = "";
+      tasks.forEach(t => {
+        const card = document.createElement("div");
+        card.className = "list-card";
+        card.innerHTML = '<div class="lc-title">' + escapeHtml(t.title) + '</div>' +
+          '<div class="lc-meta">' + (t.mode || "plan") + ' · ' + (t.messageCount || 0) + ' msgs · ' +
+          new Date(t.updated).toLocaleString() + '</div>' +
+          '<div class="lc-actions"><button class="btn ghost lc-open">open</button>' +
+          '<button class="btn ghost deny lc-del">delete</button></div>';
+        card.querySelector(".lc-open").addEventListener("click", () => loadTask(t.id));
+        card.querySelector(".lc-del").addEventListener("click", async () => {
+          await fetch(API + "/tasks/" + t.id, { method: "DELETE" }); openTasksDrawer();
+        });
+        drawerBody.appendChild(card);
+      });
+    } catch (_) { drawerBody.innerHTML = '<div class="lc-meta">Could not load tasks.</div>'; }
+  }
+  async function loadTask(id) {
+    try {
+      const r = await fetch(API + "/tasks/" + id);
+      const t = await r.json();
+      currentTaskId = t.id;
+      codeHistory = t.messages || [];
+      codePins = t.pins || [];
+      runningCost = t.cost || 0;
+      runningTokens = t.tokens || 0;
+      rebuildCodeThread();
+      renderPins(); updateContextMeter(); updateCostMeter();
+      closeDrawer();
+    } catch (_) { showCodeError("Could not load task."); }
+  }
+  // Re-render the message thread from codeHistory (text only; tool cards are not replayed).
+  function rebuildCodeThread() {
+    codeMessagesEl.innerHTML = "";
+    codeMessagesEl.appendChild(codeEmptyEl);
+    codeEmptyEl.style.display = codeHistory.length ? "none" : "";
+    for (const m of codeHistory) {
+      if (m.role === "user") addCodeMessage("user", m.content);
+      else if (m.role === "assistant" && m.content) addCodeMessage("assistant", m.content);
+    }
+  }
+
+  // ---- Checkpoints ----
+  async function openCkptDrawer() {
+    openDrawer("Checkpoints", null);
+    drawerBody.innerHTML = '<div class="lc-meta">Loading…</div>';
+    try {
+      const r = await fetch(API + "/checkpoints/" + currentTaskId);
+      const { checkpoints } = await r.json();
+      if (!checkpoints.length) { drawerBody.innerHTML = '<div class="lc-meta">No checkpoints yet. They are created automatically before each file write.</div>'; return; }
+      drawerBody.innerHTML = '<div class="lc-meta">Each entry is a file snapshot taken before a write. Roll back to restore it.</div>';
+      checkpoints.forEach(c => {
+        const card = document.createElement("div");
+        card.className = "list-card";
+        card.innerHTML = '<div class="lc-title">' + escapeHtml(c.path) + '</div>' +
+          '<div class="lc-meta">step ' + c.step + ' · ' + (c.existed ? "modified" : "created") + ' · ' +
+          new Date(c.time).toLocaleTimeString() + '</div>' +
+          '<div class="lc-actions"><button class="btn ghost lc-roll">↩ roll back</button></div>';
+        card.querySelector(".lc-roll").addEventListener("click", async () => {
+          if (!confirm("Roll back " + c.path + " to this snapshot?")) return;
+          const rr = await fetch(API + "/checkpoints/" + currentTaskId + "/" + c.id + "/rollback", { method: "POST" });
+          const jj = await rr.json();
+          showCodeError(jj.ok ? (c.path + " " + jj.action + ".") : (jj.error || "Rollback failed."));
+        });
+        drawerBody.appendChild(card);
+      });
+    } catch (_) { drawerBody.innerHTML = '<div class="lc-meta">Could not load checkpoints.</div>'; }
+  }
+
+  // ---- Skills manager ----
+  function openSkillsDrawer() {
+    openDrawer("Skills", "+ add", () => { skills.push({ id: "sk_" + Date.now(), name: "New skill", content: "", enabled: true }); saveSkills(); renderSkillsDrawer(); });
+    renderSkillsDrawer();
+  }
+  function renderSkillsDrawer() {
+    if (!skills.length) { drawerBody.innerHTML = '<div class="lc-meta">No skills yet. Add reusable instruction modules and toggle them on per session — they inject into the system message.</div>'; return; }
+    drawerBody.innerHTML = "";
+    skills.forEach((s, i) => {
+      const card = document.createElement("div");
+      card.className = "list-card skill-edit";
+      card.innerHTML =
+        '<div class="perm-row"><input class="sk-name" value="' + escapeHtml(s.name) + '" style="flex:1">' +
+        '<span class="switch"><input type="checkbox" class="sk-on"' + (s.enabled ? " checked" : "") + '><span class="slider"></span></span></div>' +
+        '<textarea class="sk-content" placeholder="Skill instructions…">' + escapeHtml(s.content) + '</textarea>' +
+        '<div class="lc-actions"><button class="btn ghost deny sk-del">delete</button></div>';
+      const nameEl = card.querySelector(".sk-name"), onEl = card.querySelector(".sk-on"), contentEl = card.querySelector(".sk-content");
+      nameEl.addEventListener("input", () => { s.name = nameEl.value; saveSkills(); });
+      onEl.addEventListener("change", () => { s.enabled = onEl.checked; saveSkills(); });
+      contentEl.addEventListener("input", () => { s.content = contentEl.value; saveSkills(); });
+      card.querySelector(".sk-del").addEventListener("click", () => { skills.splice(i, 1); saveSkills(); renderSkillsDrawer(); });
+      drawerBody.appendChild(card);
+    });
+  }
+
+  codeTasksBtn.addEventListener("click", openTasksDrawer);
+  codeCkptBtn.addEventListener("click", openCkptDrawer);
+  skillsBtn.addEventListener("click", openSkillsDrawer);
+  codeNewBtn.addEventListener("click", () => {
+    if (codeHistory.length && !confirm("Start a new task? The current one is saved in history.")) return;
+    currentTaskId = "task_" + Date.now();
+    codeHistory = []; codePins = []; runningCost = 0; runningTokens = 0;
+    rebuildCodeThread(); renderPins(); updateContextMeter(); updateCostMeter(); clearCodeError();
+  });
+
   // ===================== CODE PANEL — model selects + mode toggle =====================
 
   function populateCodeSelects() {
@@ -1243,8 +1688,8 @@
     });
   }
 
-  planModelSelect.addEventListener("change", () => localStorage.setItem(LS_PLAN_MODEL, planModelSelect.value));
-  actModelSelect.addEventListener("change",  () => localStorage.setItem(LS_ACT_MODEL,  actModelSelect.value));
+  planModelSelect.addEventListener("change", () => { localStorage.setItem(LS_PLAN_MODEL, planModelSelect.value); updateContextMeter(); });
+  actModelSelect.addEventListener("change",  () => { localStorage.setItem(LS_ACT_MODEL,  actModelSelect.value);  updateContextMeter(); });
 
   function setCodeMode(mode) {
     codeMode = mode;
@@ -1252,6 +1697,7 @@
     modeActBtn.classList.toggle("active",  mode === "act");
     modePlanBtn.setAttribute("aria-pressed", mode === "plan" ? "true" : "false");
     modeActBtn.setAttribute("aria-pressed",  mode === "act"  ? "true" : "false");
+    updateContextMeter();
   }
   modePlanBtn.addEventListener("click", () => setCodeMode("plan"));
   modeActBtn.addEventListener("click",  () => setCodeMode("act"));
@@ -1416,6 +1862,7 @@
     if (!codeModel) { showCodeError("Please pick a model first."); return; }
 
     clearCodeError();
+    closeMentions();
     toolCards.clear();
     codeInputEl.value = "";
     codeInputEl.style.height = "auto";
@@ -1423,10 +1870,14 @@
     addCodeMessage("user", text);
     codeHistory.push({ role: "user", content: text });
 
+    // Context-window management: trim oldest turns if we're near the limit.
+    trimHistoryIfNeeded();
+
     setCodeStreaming(true);
     codeAbortController = new AbortController();
 
-    const systemMessage = globalRulesEl.value.trim();
+    const perms = getPerms();
+    const systemMessage = composeCodeSystem();
 
     let res;
     try {
@@ -1437,7 +1888,10 @@
           model: codeModel,
           messages: codeHistory,
           systemMessage,
-          mode: codeMode
+          mode: codeMode,
+          permissions: perms,
+          maxIterations: perms.maxIterations,
+          taskId: currentTaskId
         }),
         signal: codeAbortController.signal
       });
@@ -1538,6 +1992,20 @@
               }
               break;
 
+            case "usage":
+              runningCost += evt.cost || 0;
+              runningTokens += (evt.prompt || 0) + (evt.completion || 0);
+              updateCostMeter();
+              break;
+
+            case "checkpoint":
+              // a file snapshot was taken; nothing to render inline (visible in drawer)
+              break;
+
+            case "auto_approved":
+              // an action was auto-approved by the permission settings; no modal
+              break;
+
             case "done":
               // Finalize the last bubble
               if (codeCurrentBubble) {
@@ -1578,19 +2046,46 @@
       }
     } finally {
       setCodeStreaming(false);
+      updateContextMeter();
+      saveCurrentTask();   // autosave the task to disk after each turn
     }
+  }
+
+  // Drop oldest user/assistant turns when the estimated context exceeds ~75%.
+  function trimHistoryIfNeeded() {
+    const ctxLen = currentContextLen();
+    const budget = Math.floor(ctxLen * 0.75);
+    const sysTokens = estTokens(composeCodeSystem());
+    function total() { return sysTokens + codeHistory.reduce((a, m) =>
+      a + estTokens(typeof m.content === "string" ? m.content : JSON.stringify(m)), 0); }
+    let trimmed = 0;
+    // Keep the most recent turns; never drop the final user message.
+    while (total() > budget && codeHistory.length > 2) {
+      codeHistory.shift();
+      // also drop an orphaned tool/assistant pairing at the new head
+      while (codeHistory.length > 2 && codeHistory[0].role === "tool") codeHistory.shift();
+      trimmed++;
+    }
+    if (trimmed) showCodeError("Context near limit — trimmed " + trimmed + " older message(s).");
   }
 
   // Code panel event wiring
   codeSendBtn.addEventListener("click", sendAgentMessage);
   codeStopBtn.addEventListener("click", () => { if (codeAbortController) codeAbortController.abort(); });
 
-  codeInputEl.addEventListener("input", () => {
+  codeInputEl.addEventListener("keydown", (e) => {
+    // @-mention navigation takes precedence
+    if (mentionState.open) {
+      if (e.key === "ArrowDown") { e.preventDefault(); mentionState.sel = Math.min(mentionState.sel + 1, mentionState.items.length - 1); renderMentions(); return; }
+      if (e.key === "ArrowUp")   { e.preventDefault(); mentionState.sel = Math.max(mentionState.sel - 1, 0); renderMentions(); return; }
+      if (e.key === "Enter")     { e.preventDefault(); chooseMention(mentionState.sel); return; }
+      if (e.key === "Escape")    { closeMentions(); return; }
+    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAgentMessage(); }
+  });
+  codeInputEl.addEventListener("keyup", () => {
     codeInputEl.style.height = "auto";
     codeInputEl.style.height = Math.min(codeInputEl.scrollHeight, 200) + "px";
-  });
-  codeInputEl.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendAgentMessage(); }
   });
 
   codeClearBtn.addEventListener("click", () => {
@@ -1611,6 +2106,11 @@
   loadModels();
   updateSelectedModelLabel();
   autoGrow();
+  loadPerms();
+  loadSkills();
+  renderPins();
+  updateContextMeter();
+  updateCostMeter();
 })();
 </script>
 </body>

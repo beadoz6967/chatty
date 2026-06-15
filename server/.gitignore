@@ -1,3 +1,6 @@
 # Never commit secrets or installed deps
 .env
 node_modules/
+
+# Runtime data (saved tasks + checkpoint snapshots)
+.data/

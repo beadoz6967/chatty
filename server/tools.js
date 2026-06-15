@@ -7,6 +7,41 @@ const READ_LIMIT = 50 * 1024;   // 50 KB hard cap on read_file
 const LIST_LIMIT = 300;          // max entries for list_dir
 const SEARCH_LIMIT = 100;        // max matching lines for search
 
+// ---- .agentignore ----------------------------------------------------------
+// Patterns the agent may NOT read or write. Always-on defaults + workspace file.
+const DEFAULT_IGNORES = ["node_modules", ".git", ".env", ".env.*", ".data"];
+
+function buildIgnore(workspaceDir) {
+  let patterns = DEFAULT_IGNORES.slice();
+  try {
+    const f = path.join(workspaceDir, ".agentignore");
+    if (fs.existsSync(f)) {
+      const lines = fs.readFileSync(f, "utf8").split(/\r?\n/)
+        .map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+      patterns = patterns.concat(lines);
+    }
+  } catch (_) {}
+
+  // Convert a gitignore-ish glob to a RegExp that matches a single path segment
+  // or a full relative path.
+  const regexes = patterns.map(p => {
+    const clean = p.replace(/\/+$/, "");
+    const rx = clean
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*/g, "[^/]*")
+      .replace(/\?/g, "[^/]");
+    return new RegExp("^" + rx + "$");
+  });
+
+  // relPath uses forward slashes; matches if any segment or the whole path hits
+  return function isIgnored(relPath) {
+    const norm = relPath.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!norm || norm === ".") return false;
+    const segments = norm.split("/");
+    return regexes.some(rx => rx.test(norm) || segments.some(seg => rx.test(seg)));
+  };
+}
+
 // ---- workspace guard -------------------------------------------------------
 // Every tool path must stay inside WORKSPACE_DIR. Throws on escape attempt.
 function resolveSafe(workspaceDir, relPath) {
@@ -26,11 +61,15 @@ function listDir(workspaceDir, args) {
   try { target = resolveSafe(workspaceDir, args.path || "."); }
   catch (e) { return "Error: " + e.message; }
 
+  const isIgnored = buildIgnore(workspaceDir);
+  const baseRel = (args.path || ".").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/$/, "");
+
   let entries;
   try { entries = fs.readdirSync(target, { withFileTypes: true }); }
   catch (e) { return "Error reading directory: " + e.message; }
 
-  if (entries.length === 0) return "(empty directory)";
+  entries = entries.filter(e => !isIgnored((baseRel && baseRel !== "." ? baseRel + "/" : "") + e.name));
+  if (entries.length === 0) return "(empty directory, or all entries ignored)";
 
   const lines = entries.slice(0, LIST_LIMIT).map(e => {
     const isDir = e.isDirectory();
@@ -53,6 +92,10 @@ function readFile(workspaceDir, args) {
   let target;
   try { target = resolveSafe(workspaceDir, args.path); }
   catch (e) { return "Error: " + e.message; }
+
+  if (buildIgnore(workspaceDir)(args.path)) {
+    return "Error: '" + args.path + "' is excluded by .agentignore and cannot be read.";
+  }
 
   let stat;
   try { stat = fs.statSync(target); }
@@ -99,7 +142,7 @@ function search(workspaceDir, args) {
     catch (e) { return "Error: invalid file_pattern — " + e.message; }
   }
 
-  const SKIP_DIRS = new Set(["node_modules", ".git", ".next", "dist", "build", "__pycache__"]);
+  const isIgnored = buildIgnore(workspaceDir);
   const results = [];
 
   function searchFile(filePath, relPath) {
@@ -124,9 +167,9 @@ function search(workspaceDir, args) {
     for (const e of entries) {
       if (results.length >= SEARCH_LIMIT) break;
       const full = path.join(dir, e.name);
-      const rel = path.join(base, e.name);
+      const rel = path.join(base, e.name).replace(/\\/g, "/").replace(/^\.\//, "");
+      if (isIgnored(rel)) continue;
       if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) continue;
         walk(full, rel);
       } else if (e.isFile()) {
         if (fileFilter && !fileFilter.test(e.name)) continue;
@@ -191,13 +234,17 @@ function simpleDiff(oldText, newText) {
 }
 
 // ---- write_file ------------------------------------------------------------
-async function writeFile(workspaceDir, args, requestConfirm) {
+async function writeFile(workspaceDir, args, requestConfirm, onBeforeWrite) {
   if (!args.path) return "Error: 'path' argument is required.";
   if (args.content == null) return "Error: 'content' argument is required.";
 
   let target;
   try { target = resolveSafe(workspaceDir, args.path); }
   catch (e) { return "Error: " + e.message; }
+
+  if (buildIgnore(workspaceDir)(args.path)) {
+    return "Error: '" + args.path + "' is excluded by .agentignore and cannot be written.";
+  }
 
   const exists = fs.existsSync(target);
   if (exists) {
@@ -209,6 +256,8 @@ async function writeFile(workspaceDir, args, requestConfirm) {
   }
 
   try {
+    // Checkpoint the file's prior state (for one-click rollback) before writing.
+    if (onBeforeWrite) { try { onBeforeWrite(args.path, target); } catch (_) {} }
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, args.content, "utf8");
     return (exists ? "Updated" : "Created") + " " + args.path + " (" + Buffer.byteLength(args.content) + " bytes).";
@@ -273,12 +322,12 @@ async function runCommand(workspaceDir, args, requestConfirm, onOutput, signal) 
 // Async — write_file and run_command need to await user confirmation.
 // callbacks: { requestConfirm, onOutput, signal }
 async function executeTool(name, args, workspaceDir, callbacks = {}) {
-  const { requestConfirm = async () => true, onOutput = () => {}, signal } = callbacks;
+  const { requestConfirm = async () => true, onOutput = () => {}, signal, onBeforeWrite } = callbacks;
   switch (name) {
     case "list_dir":    return listDir(workspaceDir, args || {});
     case "read_file":   return readFile(workspaceDir, args || {});
     case "search":      return search(workspaceDir, args || {});
-    case "write_file":  return writeFile(workspaceDir, args || {}, requestConfirm);
+    case "write_file":  return writeFile(workspaceDir, args || {}, requestConfirm, onBeforeWrite);
     case "run_command": return runCommand(workspaceDir, args || {}, requestConfirm, onOutput, signal);
     default:            return "Error: unknown tool '" + name + "'.";
   }
@@ -398,4 +447,27 @@ const TOOL_DEFINITIONS = [
   }
 ];
 
-module.exports = { TOOL_DEFINITIONS, READ_TOOL_NAMES, executeTool };
+// ---- workspace file listing (Phase 6 @-context) ----------------------------
+// Returns up to `limit` relative file paths matching `query`, respecting ignore.
+function listWorkspaceFiles(workspaceDir, query = "", limit = 40) {
+  const isIgnored = buildIgnore(workspaceDir);
+  const q = (query || "").toLowerCase();
+  const out = [];
+  function walk(dir, base) {
+    if (out.length >= limit) return;
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    catch (_) { return; }
+    for (const e of entries) {
+      if (out.length >= limit) break;
+      const rel = (base ? base + "/" : "") + e.name;
+      if (isIgnored(rel)) continue;
+      if (e.isDirectory()) walk(path.join(dir, e.name), rel);
+      else if (e.isFile() && (!q || rel.toLowerCase().includes(q))) out.push(rel);
+    }
+  }
+  try { walk(path.resolve(workspaceDir), ""); } catch (_) {}
+  return out;
+}
+
+module.exports = { TOOL_DEFINITIONS, READ_TOOL_NAMES, executeTool, listWorkspaceFiles, buildIgnore };

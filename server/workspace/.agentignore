@@ -1,0 +1,10 @@
+# Files and folders the CODE agent may NOT read or write.
+# One pattern per line. Supports * and ? globs. Matches any path segment.
+# These defaults are always applied even without this file:
+#   node_modules  .git  .env  .env.*  .data
+#
+# Add your own below, e.g.:
+# dist
+# build
+# *.log
+# secrets
