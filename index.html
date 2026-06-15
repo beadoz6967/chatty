@@ -361,6 +361,47 @@
 
   .mobile-toggle { display: none; }
 
+  /* ---------- Workspace column + panel switch ---------- */
+  .workspace { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .workspace > .chat, .workspace > .code { flex: 1; min-height: 0; }
+
+  .panel-switch {
+    display: inline-flex; gap: 4px; padding: 4px; align-self: flex-start;
+    background: rgba(8, 24, 48, 0.4);
+    border: 1px solid var(--glass-border);
+    border-radius: 14px;
+  }
+  .seg {
+    border: none; background: transparent; color: var(--ink-dim);
+    padding: 8px 22px; border-radius: 10px; cursor: pointer;
+    font-weight: 600; letter-spacing: 1.5px; font-size: 12px;
+    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  }
+  .seg:hover { color: var(--ink); }
+  .seg.active {
+    background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep));
+    color: #20160a; box-shadow: 0 4px 14px rgba(244,213,141,0.3);
+  }
+  .seg:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(244,213,141,0.35); }
+
+  /* CODE panel (shell for now) */
+  .code { display: flex; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
+  .code .chat-head .title::before { content: "⌘ "; }
+  .code-body { flex: 1; display: flex; padding: 24px; min-height: 0; overflow: auto; }
+  .pill {
+    display: inline-block; margin-top: 10px; padding: 4px 12px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+    background: rgba(120,180,240,0.14); border: 1px solid var(--glass-border); color: var(--ink-dim);
+  }
+
+  /* Backend status indicator */
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 7px; vertical-align: middle; background: var(--ink-dim);
+    box-shadow: 0 0 8px currentColor; }
+  .status-dot.ok { background: #7ce0a8; color: #7ce0a8; }
+  .status-dot.warn { background: var(--gold); color: var(--gold); }
+  .status-dot.bad { background: var(--danger); color: var(--danger); }
+
   /* ---------- Responsive ---------- */
   @media (max-width: 860px) {
     .app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
@@ -389,12 +430,9 @@
       </div>
 
       <div class="field">
-        <label for="apiKey">API Key</label>
-        <input class="control" id="apiKey" type="password" placeholder="sk-or-v1-…" autocomplete="off" spellcheck="false" />
-        <div class="row" style="justify-content: space-between;">
-          <span class="status-line" id="keyStatus">No key saved</span>
-          <button class="btn ghost" id="clearKeyBtn" type="button">clear key</button>
-        </div>
+        <label>Backend</label>
+        <div class="selected-model" id="backendStatus"><span class="status-dot"></span>Connecting to localhost…</div>
+        <span class="status-line">Your OpenRouter key lives in <b>server/.env</b>, never in the browser.</span>
       </div>
 
       <div class="field model-box">
@@ -414,8 +452,15 @@
       </div>
     </aside>
 
-    <!-- ================= CHAT ================= -->
-    <main class="chat glass">
+    <!-- ================= WORKSPACE (CHAT / CODE) ================= -->
+    <div class="workspace">
+      <div class="panel-switch" role="tablist" aria-label="Panel">
+        <button class="seg active" id="tabChat" type="button" role="tab" aria-selected="true" aria-controls="chatPanel">CHAT</button>
+        <button class="seg" id="tabCode" type="button" role="tab" aria-selected="false" aria-controls="codePanel">CODE</button>
+      </div>
+
+      <!-- ----- CHAT panel (plain conversation) ----- -->
+      <main class="chat glass" id="chatPanel" role="tabpanel">
       <div class="chat-head">
         <span class="title">conversation</span>
         <div class="row">
@@ -436,7 +481,7 @@
       <div class="messages" id="messages">
         <div class="empty" id="emptyState">
           <h2>Welcome aboard ✦</h2>
-          <p>Paste your OpenRouter key, pick a model, and start chatting. Replies stream in real time.</p>
+          <p>Pick a model and start chatting. Replies stream in real time, routed through your local backend.</p>
         </div>
       </div>
 
@@ -444,19 +489,32 @@
         <textarea class="control" id="input" placeholder="Type a message…  (Enter to send · Shift+Enter for newline)" rows="1"></textarea>
         <button class="btn gold send-btn" id="sendBtn" type="button">Send</button>
       </div>
-    </main>
+      </main>
+
+      <!-- ----- CODE panel (agent — shell for now) ----- -->
+      <section class="code glass" id="codePanel" role="tabpanel" hidden>
+        <div class="chat-head"><span class="title">code agent</span></div>
+        <div class="code-body">
+          <div class="empty" style="margin:auto;">
+            <h2>Agent panel</h2>
+            <p>The agentic coding assistant arrives in the next phase. For now, CHAT is fully live and the shared model selector &amp; global rules already work here too.</p>
+            <span class="pill">Phase 1 · shell</span>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 
 <script>
 (function () {
   "use strict";
 
-  const LS_KEY = "chatty.apiKey";
   const LS_MODEL = "chatty.model";
   const LS_GLOBAL = "chatty.globalRules";    // standing rules, every chat
   const LS_PERCHAT = "chatty.perChatRules";  // rules for the active conversation
   const LS_SYSTEM = "chatty.system";          // legacy single-prompt key (migrated below)
-  const API_BASE = "https://openrouter.ai/api/v1";
+  // The browser now talks to the local backend, which holds the OpenRouter key.
+  const API = "/api";
 
   // ---- state ----
   let models = [];
@@ -467,9 +525,11 @@
 
   // ---- elements ----
   const $ = (id) => document.getElementById(id);
-  const apiKeyEl = $("apiKey");
-  const keyStatusEl = $("keyStatus");
-  const clearKeyBtn = $("clearKeyBtn");
+  const backendStatusEl = $("backendStatus");
+  const tabChat = $("tabChat");
+  const tabCode = $("tabCode");
+  const chatPanel = $("chatPanel");
+  const codePanel = $("codePanel");
   const modelSearchEl = $("modelSearch");
   const modelListEl = $("modelList");
   const modelStatusEl = $("modelStatus");
@@ -545,23 +605,34 @@
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
-  // ===================== API key =====================
-  function loadKey() {
-    const k = localStorage.getItem(LS_KEY) || "";
-    apiKeyEl.value = k;
-    keyStatusEl.textContent = k ? "Key saved ✓" : "No key saved";
+  // ===================== backend status =====================
+  function setBackendStatus(kind, text) {
+    backendStatusEl.innerHTML = '<span class="status-dot ' + kind + '"></span>' + text;
   }
-  apiKeyEl.addEventListener("input", () => {
-    const v = apiKeyEl.value.trim();
-    if (v) { localStorage.setItem(LS_KEY, v); keyStatusEl.textContent = "Key saved ✓"; }
-    else { localStorage.removeItem(LS_KEY); keyStatusEl.textContent = "No key saved"; }
-  });
-  clearKeyBtn.addEventListener("click", () => {
-    localStorage.removeItem(LS_KEY);
-    apiKeyEl.value = "";
-    keyStatusEl.textContent = "No key saved";
-    apiKeyEl.focus();
-  });
+  async function checkBackend() {
+    try {
+      const r = await fetch(API + "/health");
+      const j = await r.json();
+      if (j.ok && j.hasKey) setBackendStatus("ok", "Connected · key loaded");
+      else if (j.ok) setBackendStatus("warn", "Connected · no key in server/.env");
+      else setBackendStatus("bad", "Backend reachable but unhealthy");
+    } catch (_e) {
+      setBackendStatus("bad", "Backend offline — run <b>npm start</b>");
+    }
+  }
+
+  // ===================== panel toggle (CHAT / CODE) =====================
+  function setPanel(which) {
+    const isChat = which === "chat";
+    tabChat.classList.toggle("active", isChat);
+    tabCode.classList.toggle("active", !isChat);
+    tabChat.setAttribute("aria-selected", isChat ? "true" : "false");
+    tabCode.setAttribute("aria-selected", !isChat ? "true" : "false");
+    chatPanel.hidden = !isChat;
+    codePanel.hidden = isChat;
+  }
+  tabChat.addEventListener("click", () => setPanel("chat"));
+  tabCode.addEventListener("click", () => setPanel("code"));
 
   // ===================== system rules (two layers) =====================
   // Layer 1 — GLOBAL: standing rules applied to every conversation.
@@ -623,7 +694,7 @@
   async function loadModels() {
     modelStatusEl.textContent = "Fetching live model list…";
     try {
-      const res = await fetch(API_BASE + "/models");
+      const res = await fetch(API + "/models");
       if (!res.ok) throw new Error("HTTP " + res.status);
       const data = await res.json();
       models = (data.data || []).slice().sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id));
@@ -637,8 +708,8 @@
       updateSelectedModelLabel();
     } catch (e) {
       modelStatusEl.textContent = "";
-      modelListEl.innerHTML = '<div class="model-item"><div class="meta">Could not load models. Check your connection.</div></div>';
-      showError("Couldn't load the model list from OpenRouter. Check your internet connection and refresh.");
+      modelListEl.innerHTML = '<div class="model-item"><div class="meta">Could not load models.</div></div>';
+      showError("Couldn't load the model list. Is the backend running (npm start) and online?");
     }
   }
 
@@ -738,8 +809,6 @@
     const text = inputEl.value.trim();
     if (!text) return;
 
-    const key = (localStorage.getItem(LS_KEY) || "").trim();
-    if (!key) { showError("Please enter your OpenRouter API key first."); apiKeyEl.focus(); return; }
     if (!selectedModel) { showError("Please pick a model first."); modelSearchEl.focus(); return; }
 
     clearError();
@@ -764,15 +833,10 @@
     abortController = new AbortController();
 
     try {
-      const res = await fetch(API_BASE + "/chat/completions", {
+      const res = await fetch(API + "/chat", {
         method: "POST",
-        headers: {
-          "Authorization": "Bearer " + key,
-          "Content-Type": "application/json",
-          "HTTP-Referer": location.origin || "https://localhost",
-          "X-Title": "chatty"
-        },
-        body: JSON.stringify({ model: selectedModel, messages: payloadMessages, stream: true }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: selectedModel, messages: payloadMessages }),
         signal: abortController.signal
       });
 
@@ -839,14 +903,15 @@
       clearError();
       return;
     } else if (err instanceof HttpError) {
-      if (err.status === 401) msg = "Your API key was rejected (401). Double-check the key you pasted.";
+      if (err.status === 401) msg = "Rejected (401): " + (err.detail || "the server's OpenRouter key is missing or invalid. Check server/.env.");
       else if (err.status === 402) msg = "Payment required (402): your OpenRouter account may be out of credits.";
       else if (err.status === 429) msg = "Rate limited (429): too many requests or this model is busy. Wait a moment and try again.";
       else if (err.status === 400) msg = "Bad request (400): this model may not accept the conversation as sent." + (err.detail ? " — " + err.detail : "");
-      else if (err.status >= 500) msg = "OpenRouter had a server error (" + err.status + "). Try again shortly.";
+      else if (err.status === 502) msg = "The backend couldn't reach OpenRouter (502). Check the server's connection.";
+      else if (err.status >= 500) msg = "Server error (" + err.status + "). Try again shortly.";
       else msg = "Request failed (" + err.status + ")." + (err.detail ? " — " + err.detail : "");
     } else if (err && /Failed to fetch|NetworkError/i.test(err.message || "")) {
-      msg = "Network error: couldn't reach OpenRouter. Check your internet connection.";
+      msg = "Network error: couldn't reach the local backend. Is it running (npm start)?";
     } else {
       msg = "Something went wrong: " + (err && err.message ? err.message : "unknown error") + ".";
     }
@@ -904,7 +969,7 @@
   mobileToggle.addEventListener("click", () => sidebar.classList.toggle("collapsed"));
 
   // ===================== init =====================
-  loadKey();
+  checkBackend();
   loadModels();
   updateSelectedModelLabel();
   autoGrow();
