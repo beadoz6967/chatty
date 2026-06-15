@@ -575,28 +575,61 @@
 
   .mobile-toggle { display: none; }
 
-  /* ---------- Workspace column + panel switch ---------- */
+  /* ---------- Workspace column + panel management (Option C) ---------- */
   .workspace { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
-  .workspace > .chat, .workspace > .code { flex: 1; min-height: 0; }
+  .workspace > .chat, .workspace > .code { flex: 1 1 0; min-height: 0; }
+  /* Snap animation — only while .animating is on; respected by reduced-motion below */
+  .workspace.animating > .chat, .workspace.animating > .code { transition: flex-grow 0.2s ease; }
 
-  .panel-switch {
-    display: inline-flex; gap: 4px; padding: 4px; align-self: flex-start;
+  /* burger menu (replaces the old CHAT/CODE segmented switch) */
+  .workspace-bar { position: relative; align-self: flex-start; }
+  .burger-btn {
+    display: inline-flex; align-items: center; gap: 8px;
     background: rgba(8, 24, 48, 0.4);
     border: 1px solid var(--glass-border);
-    border-radius: 14px;
+    border-radius: 14px; padding: 8px 16px; cursor: pointer;
+    color: var(--ink); font-weight: 600; letter-spacing: 1px; font-size: 12px;
+    transition: background 0.2s, color 0.2s, box-shadow 0.2s, border-color 0.2s;
   }
-  .seg {
-    border: none; background: transparent; color: var(--ink-dim);
-    padding: 8px 22px; border-radius: 10px; cursor: pointer;
-    font-weight: 600; letter-spacing: 1.5px; font-size: 12px;
-    transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  .burger-btn:hover { background: rgba(120,180,240,0.18); border-color: rgba(180,220,255,0.4); }
+  .burger-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(244,213,141,0.35); }
+  .burger-btn .burger-glyph { font-size: 15px; line-height: 1; }
+  .burger-btn .burger-label { text-transform: uppercase; }
+
+  .layout-menu {
+    position: absolute; top: 100%; left: 0; z-index: 80; margin-top: 6px;
+    min-width: 160px; padding: 8px; border-radius: 14px;
+    display: none; flex-direction: column; gap: 4px;
   }
-  .seg:hover { color: var(--ink); }
-  .seg.active {
+  .layout-menu.show { display: flex; animation: rise 0.16s ease; }
+  .layout-item {
+    border: 1px solid transparent; background: transparent; color: var(--ink-dim);
+    text-align: left; padding: 9px 12px; border-radius: 10px; cursor: pointer;
+    font-weight: 500; font-size: 13px; white-space: nowrap;
+    transition: background 0.15s, color 0.15s, box-shadow 0.2s;
+  }
+  .layout-item:hover { background: rgba(120,180,240,0.18); color: var(--ink); }
+  .layout-item:focus-visible { outline: none; box-shadow: 0 0 0 2px rgba(244,213,141,0.4); }
+  .layout-item.active {
     background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep));
-    color: #20160a; box-shadow: 0 4px 14px rgba(244,213,141,0.3);
+    color: #20160a; box-shadow: 0 4px 14px rgba(244,213,141,0.3); font-weight: 600;
   }
-  .seg:focus-visible { outline: none; box-shadow: 0 0 0 3px rgba(244,213,141,0.35); }
+
+  /* draggable resize handle (Split mode only) */
+  .resize-handle {
+    position: relative; flex: 0 0 6px; height: 6px; cursor: ns-resize;
+    border-radius: 6px; border: 1px solid rgba(180,220,255,0.22);
+    background: rgba(180,220,255,0.06);
+    display: grid; place-items: center;
+    touch-action: none; transition: background 0.2s;
+  }
+  /* enlarged 12px-tall grab zone without affecting layout height */
+  .resize-handle::after { content: ""; position: absolute; left: 0; right: 0; top: -3px; bottom: -3px; }
+  .resize-handle:hover, .resize-handle.dragging { background: rgba(120,190,255,0.18); }
+  .resize-handle .grip {
+    font-size: 9px; line-height: 1; letter-spacing: 2px;
+    color: var(--ink-dim); pointer-events: none;
+  }
 
   /* CODE panel (shell for now) */
   .code { display: flex; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
@@ -672,10 +705,16 @@
     </aside>
 
     <!-- ================= WORKSPACE (CHAT / CODE) ================= -->
-    <div class="workspace">
-      <div class="panel-switch" role="tablist" aria-label="Panel">
-        <button class="seg active" id="tabChat" type="button" role="tab" aria-selected="true" aria-controls="chatPanel">CHAT</button>
-        <button class="seg" id="tabCode" type="button" role="tab" aria-selected="false" aria-controls="codePanel">CODE</button>
+    <div class="workspace" id="workspace">
+      <div class="workspace-bar">
+        <button class="burger-btn" id="burgerBtn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="layoutMenu">
+          <span class="burger-glyph">☰</span><span class="burger-label" id="burgerLabel">Chat</span>
+        </button>
+        <div class="layout-menu glass" id="layoutMenu" role="menu" aria-label="Panel layout">
+          <button class="layout-item" id="layoutChat"  type="button" role="menuitem" data-mode="chat-only">Chat only</button>
+          <button class="layout-item" id="layoutCode"  type="button" role="menuitem" data-mode="code-only">Code only</button>
+          <button class="layout-item" id="layoutSplit" type="button" role="menuitem" data-mode="split">Split</button>
+        </div>
       </div>
 
       <!-- ----- CHAT panel (plain conversation) ----- -->
@@ -709,6 +748,12 @@
         <button class="btn gold send-btn" id="sendBtn" type="button">Send</button>
       </div>
       </main>
+
+      <!-- ----- Resize handle (Split mode only) ----- -->
+      <div class="resize-handle" id="resizeHandle" role="separator" aria-orientation="horizontal"
+           aria-label="Resize Chat and Code panels" tabindex="-1" style="display:none">
+        <span class="grip">⠿</span>
+      </div>
 
       <!-- ----- CODE panel (agent) ----- -->
       <section class="code glass" id="codePanel" role="tabpanel" hidden>
@@ -822,6 +867,8 @@
   const LS_ACT_MODEL  = "chatty.actModel";
   const LS_PERMS      = "chatty.perms";
   const LS_SKILLS     = "chatty.skills";
+  const LS_LAYOUT     = "chatty.layoutMode";
+  const LS_SPLIT      = "chatty.splitRatio";
   const API = "/api";
 
   // ---- state ----
@@ -849,8 +896,11 @@
   // ---- elements ----
   const $ = (id) => document.getElementById(id);
   const backendStatusEl = $("backendStatus");
-  const tabChat = $("tabChat");
-  const tabCode = $("tabCode");
+  const workspaceEl = $("workspace");
+  const burgerBtn = $("burgerBtn");
+  const burgerLabel = $("burgerLabel");
+  const layoutMenu = $("layoutMenu");
+  const resizeHandle = $("resizeHandle");
   const chatPanel = $("chatPanel");
   const codePanel = $("codePanel");
   const modelSearchEl = $("modelSearch");
@@ -980,18 +1030,149 @@
     }
   }
 
-  // ===================== panel toggle (CHAT / CODE) =====================
-  function setPanel(which) {
-    const isChat = which === "chat";
-    tabChat.classList.toggle("active", isChat);
-    tabCode.classList.toggle("active", !isChat);
-    tabChat.setAttribute("aria-selected", isChat ? "true" : "false");
-    tabCode.setAttribute("aria-selected", !isChat ? "true" : "false");
-    chatPanel.hidden = !isChat;
-    codePanel.hidden = isChat;
+  // ===================== panel management (Option C) =====================
+  // layoutMode: "chat-only" | "code-only" | "split".  splitRatio = Chat's
+  // height share (0–100). Snap to 0% → code-only, 100% → chat-only, 50% → split.
+  const SNAP_PX = 80;        // release within this many px of 0/50/100 snaps
+  let layoutMode = localStorage.getItem(LS_LAYOUT) || "chat-only";
+  let splitRatio = (() => {
+    const n = parseFloat(localStorage.getItem(LS_SPLIT));
+    return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 50;
+  })();
+  if (!["chat-only", "code-only", "split"].includes(layoutMode)) layoutMode = "chat-only";
+
+  const reduceMotion = () =>
+    window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const MODE_LABEL = { "chat-only": "Chat", "code-only": "Code", "split": "Split" };
+
+  function applyLayout() {
+    const split = layoutMode === "split";
+    chatPanel.hidden = layoutMode === "code-only";
+    codePanel.hidden = layoutMode === "chat-only";
+    resizeHandle.style.display = split ? "" : "none";
+
+    if (split) {
+      const r = Math.min(100, Math.max(0, splitRatio));
+      chatPanel.style.flex = r + " 1 0";
+      codePanel.style.flex = (100 - r) + " 1 0";
+    } else {
+      // visible panel fills the workspace
+      chatPanel.style.flex = "1 1 0";
+      codePanel.style.flex = "1 1 0";
+    }
+
+    burgerLabel.textContent = MODE_LABEL[layoutMode];
+    for (const item of layoutMenu.querySelectorAll(".layout-item")) {
+      item.classList.toggle("active", item.dataset.mode === layoutMode);
+    }
   }
-  tabChat.addEventListener("click", () => setPanel("chat"));
-  tabCode.addEventListener("click", () => setPanel("code"));
+
+  // Animate a layout change (snap / menu pick). Reduced motion skips the tween.
+  function applyLayoutAnimated() {
+    if (reduceMotion()) { applyLayout(); return; }
+    workspaceEl.classList.add("animating");
+    applyLayout();
+    clearTimeout(applyLayoutAnimated._t);
+    applyLayoutAnimated._t = setTimeout(() => workspaceEl.classList.remove("animating"), 220);
+  }
+
+  function setLayoutMode(mode, animated) {
+    layoutMode = mode;
+    localStorage.setItem(LS_LAYOUT, mode);
+    (animated ? applyLayoutAnimated : applyLayout)();
+  }
+
+  // ---- burger menu ----
+  function openLayoutMenu() {
+    layoutMenu.classList.add("show");
+    burgerBtn.setAttribute("aria-expanded", "true");
+  }
+  function closeLayoutMenu() {
+    layoutMenu.classList.remove("show");
+    burgerBtn.setAttribute("aria-expanded", "false");
+  }
+  burgerBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    layoutMenu.classList.contains("show") ? closeLayoutMenu() : openLayoutMenu();
+  });
+  layoutMenu.addEventListener("click", (e) => {
+    const item = e.target.closest(".layout-item");
+    if (!item) return;
+    setLayoutMode(item.dataset.mode, true);
+    closeLayoutMenu();
+  });
+  document.addEventListener("click", (e) => {
+    if (layoutMenu.classList.contains("show") &&
+        !layoutMenu.contains(e.target) && e.target !== burgerBtn) closeLayoutMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && layoutMenu.classList.contains("show")) closeLayoutMenu();
+  });
+
+  // ---- draggable resize handle ----
+  let dragging = false;
+  function panelSpan() {
+    // Total draggable area = from top of Chat panel to bottom of Code panel.
+    const top = chatPanel.getBoundingClientRect().top;
+    const bottom = codePanel.getBoundingClientRect().bottom;
+    return { top, height: Math.max(1, bottom - top) };
+  }
+  function ratioFromClientY(clientY) {
+    const { top, height } = panelSpan();
+    return Math.min(100, Math.max(0, ((clientY - top) / height) * 100));
+  }
+  function onDragMove(clientY) {
+    splitRatio = ratioFromClientY(clientY);
+    applyLayout();   // live, no transition
+  }
+  function onDragEnd() {
+    if (!dragging) return;
+    dragging = false;
+    resizeHandle.classList.remove("dragging");
+    document.body.style.userSelect = "";
+    window.removeEventListener("mousemove", mouseMove);
+    window.removeEventListener("mouseup", mouseUp);
+    window.removeEventListener("touchmove", touchMove);
+    window.removeEventListener("touchend", touchEnd);
+
+    // Snap on release if within SNAP_PX of 0 / 50 / 100.
+    const { height } = panelSpan();
+    const posPx = (splitRatio / 100) * height;
+    if (posPx <= SNAP_PX) {
+      setLayoutMode("code-only", true);              // 0% = Code fullscreen
+    } else if (posPx >= height - SNAP_PX) {
+      setLayoutMode("chat-only", true);              // 100% = Chat fullscreen
+    } else if (Math.abs(posPx - height / 2) <= SNAP_PX) {
+      splitRatio = 50;
+      localStorage.setItem(LS_SPLIT, "50");
+      applyLayoutAnimated();
+    } else {
+      localStorage.setItem(LS_SPLIT, String(Math.round(splitRatio)));
+    }
+  }
+  function onDragStart() {
+    dragging = true;
+    resizeHandle.classList.add("dragging");
+    document.body.style.userSelect = "none";
+  }
+  const mouseMove = (e) => onDragMove(e.clientY);
+  const mouseUp   = () => onDragEnd();
+  const touchMove = (e) => { if (e.touches[0]) { e.preventDefault(); onDragMove(e.touches[0].clientY); } };
+  const touchEnd  = () => onDragEnd();
+
+  resizeHandle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    onDragStart();
+    window.addEventListener("mousemove", mouseMove);
+    window.addEventListener("mouseup", mouseUp);
+  });
+  resizeHandle.addEventListener("touchstart", (e) => {
+    if (!e.touches[0]) return;
+    onDragStart();
+    window.addEventListener("touchmove", touchMove, { passive: false });
+    window.addEventListener("touchend", touchEnd);
+  }, { passive: true });
 
   // ===================== system rules (two layers) =====================
   // Layer 1 — GLOBAL: standing rules applied to every conversation.
@@ -2113,6 +2294,10 @@
   renderPins();
   updateContextMeter();
   updateCostMeter();
+  // Persist defaults on first load (chat-only @ 50% ratio) and apply restored layout.
+  if (localStorage.getItem(LS_LAYOUT) === null) localStorage.setItem(LS_LAYOUT, layoutMode);
+  if (localStorage.getItem(LS_SPLIT)  === null) localStorage.setItem(LS_SPLIT, String(splitRatio));
+  applyLayout();
 })();
 </script>
 </body>
